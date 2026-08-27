@@ -85,28 +85,37 @@ class _SearchViewState extends State<_SearchView> {
           onChanged: viewModel.updateQuery,
         ),
       ),
-      body: _buildBody(context, viewModel),
+      body: Column(
+        children: [
+          _buildFilterRow(context, viewModel),
+          Expanded(child: _buildBody(context, viewModel)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterRow(BuildContext context, SearchViewModel viewModel) {
+    return Column(
+      children: [
+        for (final info in _filters)
+          ListTile(
+            dense: true,
+            leading: Icon(info.icon),
+            title: Text(info.label),
+            trailing: viewModel.activeFilters.contains(info.filter)
+                ? const Icon(Icons.check)
+                : null,
+            onTap: () => viewModel.toggleFilter(info.filter),
+          ),
+        const Divider(height: 1),
+      ],
     );
   }
 
   Widget _buildBody(BuildContext context, SearchViewModel viewModel) {
     if (viewModel.isBrowsing) {
-      return ListView(
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text('Filters', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-          for (final info in _filters)
-            ListTile(
-              leading: Icon(info.icon),
-              title: Text(info.label),
-              trailing: viewModel.activeFilters.contains(info.filter)
-                  ? const Icon(Icons.check)
-                  : null,
-              onTap: () => viewModel.toggleFilter(info.filter),
-            ),
-        ],
+      return const Center(
+        child: Text('Type to search, or pick a filter above.'),
       );
     }
 
