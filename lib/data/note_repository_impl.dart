@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -78,7 +80,45 @@ class NoteRepositoryImpl implements NoteRepository {
 
   @override
   Future<void> deleteNote(String id) async {
+    final note = await getNoteById(id);
+    if (note != null) {
+      await _deleteAttachmentFiles(note);
+    }
+
     final db = await _database;
     await db.delete(_tableName, where: 'id = ?', whereArgs: [id]);
+  }
+
+  @override
+  Future<void> deleteNotes(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await _database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final maps = await db.query(
+      _tableName,
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+    );
+    for (final map in maps) {
+      await _deleteAttachmentFiles(Note.fromMap(map));
+    }
+
+    await db.delete(_tableName, where: 'id IN ($placeholders)', whereArgs: ids);
+  }
+
+  Future<void> _deleteAttachmentFiles(Note note) async {
+    for (final path in note.photoPaths) {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+    final voiceMemoPath = note.voiceMemoPath;
+    if (voiceMemoPath != null) {
+      final file = File(voiceMemoPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
   }
 }

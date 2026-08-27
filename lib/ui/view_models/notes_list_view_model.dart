@@ -15,6 +15,9 @@ class NotesListViewModel extends ChangeNotifier {
   NotesListStatus status = NotesListStatus.loading;
   List<Note> notes = [];
   String? errorMessage;
+  bool isGalleryView = false;
+  bool isSelectionMode = false;
+  final Set<String> selectedNoteIds = {};
 
   Future<void> loadNotes() async {
     status = NotesListStatus.loading;
@@ -34,6 +37,38 @@ class NotesListViewModel extends ChangeNotifier {
 
   Future<void> deleteNote(String id) async {
     await _repository.deleteNote(id);
+    await loadNotes();
+  }
+
+  void toggleGalleryView() {
+    isGalleryView = !isGalleryView;
+    notifyListeners();
+  }
+
+  void enterSelectionMode() {
+    isSelectionMode = true;
+    selectedNoteIds.clear();
+    notifyListeners();
+  }
+
+  void exitSelectionMode() {
+    isSelectionMode = false;
+    selectedNoteIds.clear();
+    notifyListeners();
+  }
+
+  void toggleNoteSelection(String id) {
+    if (!selectedNoteIds.remove(id)) selectedNoteIds.add(id);
+    notifyListeners();
+  }
+
+  Future<void> deleteSelectedOrAll() async {
+    final ids = selectedNoteIds.isEmpty
+        ? notes.map((n) => n.id).toList()
+        : selectedNoteIds.toList();
+    await _repository.deleteNotes(ids);
+    isSelectionMode = false;
+    selectedNoteIds.clear();
     await loadNotes();
   }
 }
