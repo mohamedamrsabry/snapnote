@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
-
 import '../domain/note.dart';
 import '../domain/note_repository.dart';
 import 'permission_request_screen.dart';
+import 'share_note.dart';
 import 'view_models/note_detail_view_model.dart';
 
 class NoteDetailScreen extends StatelessWidget {
@@ -53,6 +53,86 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     super.dispose();
   }
 
+  void _showLockedMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('This note is locked. Edits are disabled.'),
+      ),
+    );
+  }
+
+  Future<void> _showAddTagSheet() async {
+    final viewModel = context.read<NoteDetailViewModel>();
+    if (viewModel.note.isLocked) {
+      _showLockedMessage();
+      return;
+    }
+    final availableTags = await viewModel.getAvailableTags();
+    if (!mounted) return;
+
+    final newTagController = TextEditingController();
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (availableTags.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Choose a tag',
+                    style: Theme.of(sheetContext).textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                for (final tag in availableTags)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.label_outline),
+                    title: Text(tag),
+                    onTap: () {
+                      viewModel.addTag(tag);
+                      Navigator.of(sheetContext).pop();
+                    },
+                  ),
+                const SizedBox(height: 8),
+                const Divider(height: 1),
+                const SizedBox(height: 16),
+              ],
+              Text(
+                'Create a new tag',
+                style: Theme.of(
+                  sheetContext,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: newTagController,
+                autofocus: availableTags.isEmpty,
+                decoration: const InputDecoration(hintText: 'New tag name'),
+                onSubmitted: (value) {
+                  viewModel.addTag(value);
+                  Navigator.of(sheetContext).pop();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleBack() async {
     final viewModel = context.read<NoteDetailViewModel>();
     if (viewModel.isRecording) {
@@ -60,6 +140,20 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     }
     await viewModel.saveNow();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _handleShare() async {
+    final note = context.read<NoteDetailViewModel>().note;
+    await shareNote(note);
+  }
+
+  void _handleAttachPressed() {
+    final viewModel = context.read<NoteDetailViewModel>();
+    if (viewModel.note.isLocked) {
+      _showLockedMessage();
+      return;
+    }
+    _showAttachmentMenu();
   }
 
   void _showAttachmentMenu() {
@@ -152,9 +246,15 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
             onPressed: _handleBack,
           ),
           actions: [
+            if (viewModel.note.isLocked)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(Icons.lock),
+              ),
+            IconButton(icon: const Icon(Icons.share), onPressed: _handleShare),
             IconButton(
               icon: const Icon(Icons.attach_file),
-              onPressed: _showAttachmentMenu,
+              onPressed: _handleAttachPressed,
             ),
           ],
         ),
@@ -166,11 +266,13 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
               TextField(
                 controller: _titleController,
                 style: Theme.of(context).textTheme.headlineSmall,
+                readOnly: viewModel.note.isLocked,
                 decoration: const InputDecoration(
                   hintText: 'Title',
                   border: InputBorder.none,
                 ),
-                onChanged: viewModel.updateTitle,
+                onTap: viewModel.note.isLocked ? _showLockedMessage : null,
+                onChanged: viewModel.note.isLocked ? null : viewModel.updateTitle,
               ),
               const SizedBox(height: 8),
               Expanded(
@@ -179,12 +281,41 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                   maxLines: null,
                   expands: true,
                   textAlignVertical: TextAlignVertical.top,
+                  readOnly: viewModel.note.isLocked,
                   decoration: const InputDecoration(
                     hintText: 'Start typing...',
                     border: InputBorder.none,
                   ),
-                  onChanged: viewModel.updateBody,
+                  onTap: viewModel.note.isLocked ? _showLockedMessage : null,
+                  onChanged: viewModel.note.isLocked ? null : viewModel.updateBody,
                 ),
+              ),
+              Consumer<NoteDetailViewModel>(
+                builder: (context, viewModel, child) {
+                  final tags = viewModel.note.tags;
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        for (final tag in tags)
+                          Chip(
+                            label: Text(tag),
+                            onDeleted: viewModel.note.isLocked
+                                ? _showLockedMessage
+                                : () => viewModel.removeTag(tag),
+                          ),
+                        ActionChip(
+                          avatar: const Icon(Icons.add, size: 16),
+                          label: const Text('Add tag'),
+                          onPressed: _showAddTagSheet,
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               Consumer<NoteDetailViewModel>(
                 builder: (context, viewModel, child) {
@@ -252,7 +383,9 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                         const Spacer(),
                         IconButton(
                           icon: const Icon(Icons.delete_outline),
-                          onPressed: viewModel.deleteVoiceMemo,
+                          onPressed: viewModel.note.isLocked
+                              ? _showLockedMessage
+                              : viewModel.deleteVoiceMemo,
                         ),
                       ],
                     );
