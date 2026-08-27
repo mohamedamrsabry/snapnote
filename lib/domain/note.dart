@@ -28,6 +28,7 @@ class Note {
     String? body,
     List<String>? photoPaths,
     String? voiceMemoPath,
+    bool clearVoiceMemo = false,
     List<String>? tags,
     bool? isPinned,
     bool? isLocked,
@@ -38,7 +39,9 @@ class Note {
       title: title ?? this.title,
       body: body ?? this.body,
       photoPaths: photoPaths ?? this.photoPaths,
-      voiceMemoPath: voiceMemoPath ?? this.voiceMemoPath,
+      voiceMemoPath: clearVoiceMemo
+          ? null
+          : (voiceMemoPath ?? this.voiceMemoPath),
       tags: tags ?? this.tags,
       isPinned: isPinned ?? this.isPinned,
       isLocked: isLocked ?? this.isLocked,
