@@ -100,7 +100,8 @@ class NoteDetailViewModel extends ChangeNotifier {
     if (_note.title.isEmpty &&
         _note.body.isEmpty &&
         _note.photoPaths.isEmpty &&
-        _note.voiceMemoPath == null) {
+        _note.voiceMemoPath == null &&
+        _note.tags.isEmpty) {
       return;
     }
     await _repository.addNote(_note);
@@ -109,6 +110,37 @@ class NoteDetailViewModel extends ChangeNotifier {
   Future<void> saveNow() async {
     _debounce?.cancel();
     await _save();
+  }
+
+  Future<List<String>> getAvailableTags() async {
+    final allNotes = await _repository.getNotes();
+    final tagSet = <String>{};
+    for (final note in allNotes) {
+      tagSet.addAll(note.tags);
+    }
+    tagSet.removeAll(_note.tags);
+    return tagSet.toList()..sort();
+  }
+
+  Future<void> addTag(String tag) async {
+    final trimmed = tag.trim();
+    if (trimmed.isEmpty || _note.tags.contains(trimmed)) return;
+
+    _note = _note.copyWith(
+      tags: [..._note.tags, trimmed],
+      updatedAt: DateTime.now(),
+    );
+    notifyListeners();
+    await saveNow();
+  }
+
+  Future<void> removeTag(String tag) async {
+    _note = _note.copyWith(
+      tags: _note.tags.where((t) => t != tag).toList(),
+      updatedAt: DateTime.now(),
+    );
+    notifyListeners();
+    await saveNow();
   }
 
   Future<void> addPhoto(File pickedFile) async {
