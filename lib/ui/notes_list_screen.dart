@@ -70,9 +70,8 @@ class NotesListScreen extends StatelessWidget {
         IconButton(
           icon: const Icon(Icons.search),
           onPressed: () async {
-            await Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SearchScreen()));
+            await Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SearchScreen()));
             viewModel.loadNotes();
           },
         ),
@@ -99,7 +98,10 @@ class NotesListScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTagFilterRow(BuildContext context, NotesListViewModel viewModel) {
+  Widget _buildTagFilterRow(
+    BuildContext context,
+    NotesListViewModel viewModel,
+  ) {
     return SizedBox(
       height: 48,
       child: ListView.separated(
@@ -169,103 +171,126 @@ class NotesListScreen extends StatelessWidget {
     viewModel.loadNotes();
   }
 
+  void _deleteWithUndo(
+    BuildContext context,
+    NotesListViewModel viewModel,
+    String noteId,
+  ) {
+    viewModel.deleteNoteWithUndo(noteId);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Note deleted'),
+        duration: NotesListViewModel.undoWindow,
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => viewModel.undoDelete(noteId),
+        ),
+      ),
+    );
+  }
+
   Widget _buildList(BuildContext context, NotesListViewModel viewModel) {
     final notes = viewModel.filteredNotes;
     final pinnedCount = viewModel.pinnedCount;
     final hasDivider = pinnedCount > 0 && pinnedCount < notes.length;
 
-    return ListView.builder(
-      itemCount: notes.length + (hasDivider ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (hasDivider && index == pinnedCount) {
-          return Divider(
-            height: 25,
-            thickness: 1,
-            indent: 16,
-            endIndent: 16,
-            color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
-          );
-        }
+    return SlidableAutoCloseBehavior(
+      child: ListView.builder(
+        itemCount: notes.length + (hasDivider ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (hasDivider && index == pinnedCount) {
+            return Divider(
+              height: 25,
+              thickness: 1,
+              indent: 16,
+              endIndent: 16,
+              color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+            );
+          }
 
-        final noteIndex = hasDivider && index > pinnedCount
-            ? index - 1
-            : index;
-        final note = notes[noteIndex];
-        final isSelected = viewModel.selectedNoteIds.contains(note.id);
-        return Slidable(
-          key: ValueKey(note.id),
-          enabled: !viewModel.isSelectionMode,
-          startActionPane: ActionPane(
-            motion: const ScrollMotion(),
-            extentRatio: 0.25,
-            children: [
-              SlidableAction(
-                onPressed: (_) => viewModel.togglePin(note.id),
-                backgroundColor: Colors.blue,
-                foregroundColor: Colors.white,
-                icon: note.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                label: note.isPinned ? 'Unpin' : 'Pin',
-              ),
-            ],
-          ),
-          endActionPane: ActionPane(
-            motion: const ScrollMotion(),
-            extentRatio: 0.72,
-            children: [
-              SlidableAction(
-                onPressed: (_) => viewModel.toggleLock(note.id),
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                icon: note.isLocked ? Icons.lock_open : Icons.lock,
-                label: note.isLocked ? 'Unlock' : 'Lock',
-              ),
-              SlidableAction(
-                onPressed: (_) => shareNote(note),
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                icon: Icons.share,
-                label: 'Share',
-              ),
-              SlidableAction(
-                onPressed: (_) => viewModel.deleteNote(note.id),
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                icon: Icons.delete,
-                label: 'Delete',
-              ),
-            ],
-          ),
-          child: ListTile(
-            leading: viewModel.isSelectionMode
-                ? Icon(
-                    isSelected
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                  )
-                : null,
-            title: Text(note.title.isEmpty ? '(Untitled)' : note.title),
-            subtitle: Text(
-              note.body,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+          final noteIndex = hasDivider && index > pinnedCount
+              ? index - 1
+              : index;
+          final note = notes[noteIndex];
+          final isSelected = viewModel.selectedNoteIds.contains(note.id);
+          return Slidable(
+            key: ValueKey(note.id),
+            groupTag: 'notes-list',
+            enabled: !viewModel.isSelectionMode,
+            startActionPane: ActionPane(
+              motion: const ScrollMotion(),
+              extentRatio: 0.25,
+              children: [
+                SlidableAction(
+                  onPressed: (_) => viewModel.togglePin(note.id),
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  icon: note.isPinned
+                      ? Icons.push_pin
+                      : Icons.push_pin_outlined,
+                  label: note.isPinned ? 'Unpin' : 'Pin',
+                ),
+              ],
             ),
-            trailing: !viewModel.isSelectionMode && (note.isPinned || note.isLocked)
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (note.isPinned)
-                        const Icon(Icons.push_pin, size: 16),
-                      if (note.isPinned && note.isLocked)
-                        const SizedBox(width: 4),
-                      if (note.isLocked)
-                        const Icon(Icons.lock, size: 16),
-                    ],
-                  )
-                : null,
-            onTap: () => _handleTap(context, viewModel, note),
-          ),
-        );
-      },
+            endActionPane: ActionPane(
+              motion: const ScrollMotion(),
+              extentRatio: 0.72,
+              children: [
+                SlidableAction(
+                  onPressed: (_) => viewModel.toggleLock(note.id),
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  icon: note.isLocked ? Icons.lock_open : Icons.lock,
+                  label: note.isLocked ? 'Unlock' : 'Lock',
+                ),
+                SlidableAction(
+                  onPressed: (_) => shareNote(note),
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  icon: Icons.share,
+                  label: 'Share',
+                ),
+                SlidableAction(
+                  onPressed: (actionContext) =>
+                      _deleteWithUndo(actionContext, viewModel, note.id),
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  icon: Icons.delete,
+                  label: 'Delete',
+                ),
+              ],
+            ),
+            child: ListTile(
+              leading: viewModel.isSelectionMode
+                  ? Icon(
+                      isSelected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                    )
+                  : null,
+              title: Text(note.title.isEmpty ? '(Untitled)' : note.title),
+              subtitle: Text(
+                note.body,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing:
+                  !viewModel.isSelectionMode && (note.isPinned || note.isLocked)
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (note.isPinned) const Icon(Icons.push_pin, size: 16),
+                        if (note.isPinned && note.isLocked)
+                          const SizedBox(width: 4),
+                        if (note.isLocked) const Icon(Icons.lock, size: 16),
+                      ],
+                    )
+                  : null,
+              onTap: () => _handleTap(context, viewModel, note),
+            ),
+          );
+        },
+      ),
     );
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../domain/note.dart';
@@ -7,6 +9,9 @@ enum NotesListStatus { loading, empty, error, success }
 
 class NotesListViewModel extends ChangeNotifier {
   final NoteRepository _repository;
+  final Map<String, Timer> _pendingDeletes = {};
+
+  static const undoWindow = Duration(seconds: 4);
 
   NotesListViewModel(this._repository) {
     loadNotes();
@@ -52,8 +57,8 @@ class NotesListViewModel extends ChangeNotifier {
 
     try {
       final result = await _repository.getNotes();
-      notes = result;
-      status = result.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
+      notes = result.where((n) => !_pendingDeletes.containsKey(n.id)).toList();
+      status = notes.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
     } catch (e) {
       errorMessage = 'Could not load your notes.';
       status = NotesListStatus.error;
@@ -62,9 +67,22 @@ class NotesListViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteNote(String id) async {
-    await _repository.deleteNote(id);
-    await loadNotes();
+  void deleteNoteWithUndo(String id) {
+    notes = notes.where((n) => n.id != id).toList();
+    status = notes.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
+    notifyListeners();
+
+    _pendingDeletes[id] = Timer(undoWindow, () async {
+      _pendingDeletes.remove(id);
+      await _repository.deleteNote(id);
+    });
+  }
+
+  void undoDelete(String id) {
+    final timer = _pendingDeletes.remove(id);
+    if (timer == null) return;
+    timer.cancel();
+    loadNotes();
   }
 
   Future<void> togglePin(String id) async {
@@ -109,5 +127,13 @@ class NotesListViewModel extends ChangeNotifier {
     isSelectionMode = false;
     selectedNoteIds.clear();
     await loadNotes();
+  }
+
+  @override
+  void dispose() {
+    for (final timer in _pendingDeletes.values) {
+      timer.cancel();
+    }
+    super.dispose();
   }
 }
