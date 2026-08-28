@@ -5,6 +5,8 @@ import '../domain/note_repository.dart';
 import 'note_detail_screen.dart';
 import 'view_models/search_view_model.dart';
 
+const _pillColor = Color(0xFF2C2C2E);
+
 class SearchScreen extends StatelessWidget {
   const SearchScreen({super.key});
 
@@ -19,25 +21,16 @@ class SearchScreen extends StatelessWidget {
 
 class _FilterInfo {
   final SearchFilter filter;
-  final IconData icon;
   final String label;
 
-  const _FilterInfo(this.filter, this.icon, this.label);
+  const _FilterInfo(this.filter, this.label);
 }
 
 const _filters = [
-  _FilterInfo(SearchFilter.lockedNotes, Icons.lock_outline, 'Locked Notes'),
-  _FilterInfo(
-    SearchFilter.checklists,
-    Icons.check_box_outlined,
-    'Notes with Checklists',
-  ),
-  _FilterInfo(SearchFilter.images, Icons.image_outlined, 'Notes with Images'),
-  _FilterInfo(
-    SearchFilter.recordings,
-    Icons.mic_none,
-    'Notes with Recordings',
-  ),
+  _FilterInfo(SearchFilter.lockedNotes, 'Locked Notes'),
+  _FilterInfo(SearchFilter.checklists, 'Notes with Checklists'),
+  _FilterInfo(SearchFilter.images, 'Notes with Images'),
+  _FilterInfo(SearchFilter.recordings, 'Notes with Recordings'),
 ];
 
 class _SearchView extends StatefulWidget {
@@ -62,73 +55,139 @@ class _SearchViewState extends State<_SearchView> {
 
     return Scaffold(
       appBar: AppBar(
+        titleSpacing: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: TextField(
-          controller: _controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: 'Search by the title and body text...',
-            border: InputBorder.none,
-            suffixIcon: viewModel.query.isNotEmpty
-                ? IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () {
-                      _controller.clear();
-                      viewModel.clear();
-                    },
-                  )
-                : null,
+        title: Container(
+          height: 44,
+          margin: const EdgeInsets.only(right: 16),
+          decoration: BoxDecoration(
+            color: _pillColor,
+            borderRadius: BorderRadius.circular(22),
           ),
-          onChanged: viewModel.updateQuery,
+          child: TextField(
+            controller: _controller,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Search by the title and body text...',
+              hintStyle: const TextStyle(color: Colors.white38),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+              suffixIcon: viewModel.query.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                      onPressed: () {
+                        _controller.clear();
+                        viewModel.clear();
+                      },
+                    )
+                  : null,
+            ),
+            onChanged: viewModel.updateQuery,
+          ),
         ),
       ),
       body: Column(
         children: [
-          _buildFilterRow(context, viewModel),
+          if (viewModel.query.isEmpty) _buildFilterSection(context, viewModel),
           Expanded(child: _buildBody(context, viewModel)),
         ],
       ),
     );
   }
 
-  Widget _buildFilterRow(BuildContext context, SearchViewModel viewModel) {
-    return Column(
-      children: [
-        for (final info in _filters)
-          ListTile(
-            dense: true,
-            leading: Icon(info.icon),
-            title: Text(info.label),
-            trailing: viewModel.activeFilters.contains(info.filter)
-                ? const Icon(Icons.check)
-                : null,
-            onTap: () => viewModel.toggleFilter(info.filter),
+  Widget _buildFilterSection(BuildContext context, SearchViewModel viewModel) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Filters',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
-        const Divider(height: 1),
-      ],
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: _pillColor,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              children: [
+                for (final info in _filters)
+                  Column(
+                    children: [
+                      ListTile(
+                        title: Text(
+                          info.label,
+                          style: TextStyle(
+                            color: viewModel.activeFilters.contains(
+                              info.filter,
+                            )
+                                ? Colors.white
+                                : Colors.white70,
+                          ),
+                        ),
+                        trailing: viewModel.activeFilters.contains(info.filter)
+                            ? const Icon(Icons.check, color: Colors.white)
+                            : null,
+                        onTap: () => viewModel.toggleFilter(info.filter),
+                      ),
+                      if (info != _filters.last)
+                        const Divider(
+                          height: 1,
+                          indent: 16,
+                          endIndent: 16,
+                          color: Colors.white24,
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildBody(BuildContext context, SearchViewModel viewModel) {
     if (viewModel.isBrowsing) {
       return const Center(
-        child: Text('Type to search, or pick a filter above.'),
+        child: Text(
+          'Type to search, or pick a filter above.',
+          style: TextStyle(color: Colors.white54),
+        ),
       );
     }
 
     final results = viewModel.results;
 
     if (results.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.search_off, size: 48),
-            SizedBox(height: 16),
-            Text('File not found. Try searching again.'),
+            Image.asset(
+              'assets/images/cuate.png',
+              width: 260,
+              errorBuilder: (context, error, stackTrace) => const Icon(
+                Icons.search_off,
+                size: 96,
+                color: Colors.white24,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'File not found. Try searching again.',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
           ],
         ),
       );
@@ -139,11 +198,15 @@ class _SearchViewState extends State<_SearchView> {
       itemBuilder: (context, index) {
         final note = results[index];
         return ListTile(
-          title: Text(note.title.isEmpty ? '(Untitled)' : note.title),
+          title: Text(
+            note.title.isEmpty ? '(Untitled)' : note.title,
+            style: const TextStyle(color: Colors.white),
+          ),
           subtitle: Text(
             note.body,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white54),
           ),
           onTap: () async {
             await Navigator.of(context).push(
