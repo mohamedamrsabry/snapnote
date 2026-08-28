@@ -7,6 +7,7 @@ class Note {
   final List<String> tags;
   final bool isPinned;
   final bool isLocked;
+  final int colorValue;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -19,6 +20,7 @@ class Note {
     this.tags = const [],
     this.isPinned = false,
     this.isLocked = false,
+    required this.colorValue,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -32,6 +34,7 @@ class Note {
     List<String>? tags,
     bool? isPinned,
     bool? isLocked,
+    int? colorValue,
     DateTime? updatedAt,
   }) {
     return Note(
@@ -45,6 +48,7 @@ class Note {
       tags: tags ?? this.tags,
       isPinned: isPinned ?? this.isPinned,
       isLocked: isLocked ?? this.isLocked,
+      colorValue: colorValue ?? this.colorValue,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -60,6 +64,7 @@ class Note {
       'tags': tags.join(','),
       'isPinned': isPinned ? 1 : 0,
       'isLocked': isLocked ? 1 : 0,
+      'colorValue': colorValue,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
@@ -79,6 +84,7 @@ class Note {
           : (map['tags'] as String).split(','),
       isPinned: (map['isPinned'] as int) == 1,
       isLocked: (map['isLocked'] as int) == 1,
+      colorValue: map['colorValue'] as int,
       createdAt: DateTime.parse(map['createdAt'] as String),
       updatedAt: DateTime.parse(map['updatedAt'] as String),
     );

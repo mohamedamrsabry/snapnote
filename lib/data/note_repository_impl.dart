@@ -1,46 +1,15 @@
 import 'dart:io';
 
-import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../domain/note.dart';
 import '../domain/note_repository.dart';
+import 'app_database.dart';
 
 class NoteRepositoryImpl implements NoteRepository {
-  static const String _tableName = 'notes';
-  static Database? _db;
+  static const String _tableName = AppDatabase.notesTable;
 
-  Future<Database> get _database async {
-    if (_db != null) return _db!;
-    _db = await _initDatabase();
-    return _db!;
-  }
-
-  Future<Database> _initDatabase() async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'snapnote.db');
-
-    return openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE $_tableName (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            photoPaths TEXT NOT NULL,
-            voiceMemoPath TEXT,
-            tags TEXT NOT NULL,
-            isPinned INTEGER NOT NULL,
-            isLocked INTEGER NOT NULL,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL
-          )
-        ''');
-      },
-    );
-  }
+  Future<Database> get _database => AppDatabase.instance;
 
   @override
   Future<List<Note>> getNotes() async {

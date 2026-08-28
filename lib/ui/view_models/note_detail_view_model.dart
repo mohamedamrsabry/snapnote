@@ -9,9 +9,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../../domain/note.dart';
 import '../../domain/note_repository.dart';
+import '../../domain/tag.dart';
+import '../../domain/tag_repository.dart';
+import '../tag_colors.dart';
 
 class NoteDetailViewModel extends ChangeNotifier {
   final NoteRepository _repository;
+  final TagRepository _tagRepository;
   late Note _note;
   Timer? _debounce;
   final AudioRecorder _recorder = AudioRecorder();
@@ -26,17 +30,21 @@ class NoteDetailViewModel extends ChangeNotifier {
   Duration _voiceMemoDuration = Duration.zero;
   Duration _playbackPosition = Duration.zero;
 
-  NoteDetailViewModel(this._repository, {Note? existingNote}) {
+  NoteDetailViewModel(this._repository, this._tagRepository, {Note? existingNote}) {
     final now = DateTime.now();
-    _note =
-        existingNote ??
-        Note(
-          id: const Uuid().v4(),
-          title: '',
-          body: '',
-          createdAt: now,
-          updatedAt: now,
-        );
+    if (existingNote != null) {
+      _note = existingNote;
+    } else {
+      _note = Note(
+        id: const Uuid().v4(),
+        title: '',
+        body: '',
+        colorValue: tagColorPalette[0].toARGB32(),
+        createdAt: now,
+        updatedAt: now,
+      );
+      _assignStableColor();
+    }
     _playerStateSubscription = _player.onPlayerStateChanged.listen((state) {
       _isPlaying = state == PlayerState.playing;
       if (state == PlayerState.completed || state == PlayerState.stopped) {
@@ -59,6 +67,13 @@ class NoteDetailViewModel extends ChangeNotifier {
     if (_note.voiceMemoPath != null) {
       _loadVoiceMemoDuration();
     }
+  }
+
+  Future<void> _assignStableColor() async {
+    final existingNotes = await _repository.getNotes();
+    final color = paletteColorForCreationIndex(existingNotes.length);
+    _note = _note.copyWith(colorValue: color.toARGB32());
+    notifyListeners();
   }
 
   Future<void> _loadVoiceMemoDuration() async {
@@ -122,9 +137,25 @@ class NoteDetailViewModel extends ChangeNotifier {
     return tagSet.toList()..sort();
   }
 
-  Future<void> addTag(String tag) async {
+  Future<int> getSuggestedTagColor() async {
+    final existingTags = await _tagRepository.getTags();
+    return paletteColorForCreationIndex(existingTags.length).toARGB32();
+  }
+
+  Future<void> addTag(String tag, {int? colorValue}) async {
     final trimmed = tag.trim();
     if (trimmed.isEmpty || _note.tags.contains(trimmed)) return;
+
+    final existingTags = await _tagRepository.getTags();
+    final alreadyExists = existingTags.any((t) => t.name == trimmed);
+    if (!alreadyExists) {
+      final resolvedColorValue =
+          colorValue ??
+          paletteColorForCreationIndex(existingTags.length).toARGB32();
+      await _tagRepository.saveTag(
+        Tag(name: trimmed, colorValue: resolvedColorValue),
+      );
+    }
 
     _note = _note.copyWith(
       tags: [..._note.tags, trimmed],

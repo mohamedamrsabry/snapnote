@@ -6,8 +6,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import '../domain/note.dart';
 import '../domain/note_repository.dart';
+import '../domain/tag_repository.dart';
 import 'permission_request_screen.dart';
 import 'share_note.dart';
+import 'tag_colors.dart';
 import 'view_models/note_detail_view_model.dart';
 
 class NoteDetailScreen extends StatelessWidget {
@@ -20,6 +22,7 @@ class NoteDetailScreen extends StatelessWidget {
     return ChangeNotifierProvider<NoteDetailViewModel>(
       create: (context) => NoteDetailViewModel(
         context.read<NoteRepository>(),
+        context.read<TagRepository>(),
         existingNote: existingNote,
       ),
       child: const _NoteDetailView(),
@@ -68,65 +71,109 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
       return;
     }
     final availableTags = await viewModel.getAvailableTags();
+    final suggestedColor = await viewModel.getSuggestedTagColor();
     if (!mounted) return;
 
     final newTagController = TextEditingController();
+    var selectedColor = suggestedColor;
+
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
-        ),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (availableTags.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'Choose a tag',
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+          ),
+          child: SafeArea(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (availableTags.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Choose a tag',
+                        style: Theme.of(sheetContext).textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    for (final tag in availableTags)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.label_outline),
+                        title: Text(tag),
+                        onTap: () {
+                          viewModel.addTag(tag);
+                          Navigator.of(sheetContext).pop();
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                    const Divider(height: 1),
+                    const SizedBox(height: 16),
+                  ],
+                  Text(
+                    'Create a new tag',
                     style: Theme.of(sheetContext).textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.bold),
                   ),
-                ),
-                for (final tag in availableTags)
-                  ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.label_outline),
-                    title: Text(tag),
-                    onTap: () {
-                      viewModel.addTag(tag);
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: newTagController,
+                    autofocus: availableTags.isEmpty,
+                    decoration: const InputDecoration(hintText: 'New tag name'),
+                    onSubmitted: (value) {
+                      viewModel.addTag(value, colorValue: selectedColor);
                       Navigator.of(sheetContext).pop();
                     },
                   ),
-                const SizedBox(height: 8),
-                const Divider(height: 1),
-                const SizedBox(height: 16),
-              ],
-              Text(
-                'Create a new tag',
-                style: Theme.of(
-                  sheetContext,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final color in tagColorPalette)
+                        GestureDetector(
+                          onTap: () => setSheetState(
+                            () => selectedColor = color.toARGB32(),
+                          ),
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                              border: selectedColor == color.toARGB32()
+                                  ? Border.all(color: Colors.black, width: 3)
+                                  : null,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () {
+                        viewModel.addTag(
+                          newTagController.text,
+                          colorValue: selectedColor,
+                        );
+                        Navigator.of(sheetContext).pop();
+                      },
+                      child: const Text('Add'),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: newTagController,
-                autofocus: availableTags.isEmpty,
-                decoration: const InputDecoration(hintText: 'New tag name'),
-                onSubmitted: (value) {
-                  viewModel.addTag(value);
-                  Navigator.of(sheetContext).pop();
-                },
-              ),
-            ],
+            ),
           ),
         ),
       ),

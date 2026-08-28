@@ -1,19 +1,24 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../../domain/note.dart';
 import '../../domain/note_repository.dart';
+import '../../domain/tag.dart';
+import '../../domain/tag_repository.dart';
+import '../tag_colors.dart';
 
 enum NotesListStatus { loading, empty, error, success }
 
 class NotesListViewModel extends ChangeNotifier {
   final NoteRepository _repository;
+  final TagRepository _tagRepository;
   final Map<String, Timer> _pendingDeletes = {};
+  Map<String, Color> _tagColors = {};
 
   static const undoWindow = Duration(seconds: 4);
 
-  NotesListViewModel(this._repository) {
+  NotesListViewModel(this._repository, this._tagRepository) {
     loadNotes();
   }
 
@@ -24,6 +29,19 @@ class NotesListViewModel extends ChangeNotifier {
   bool isSelectionMode = false;
   final Set<String> selectedNoteIds = {};
   String? selectedTagFilter;
+
+  Color colorForNote(Note note) {
+    if (note.tags.isNotEmpty) {
+      final color = _tagColors[note.tags.first];
+      if (color != null) return color;
+    }
+    return Color(note.colorValue);
+  }
+
+  Color colorForTagName(String tag) {
+    return _tagColors[tag] ??
+        tagColorPalette[tag.hashCode.abs() % tagColorPalette.length];
+  }
 
   List<String> get allTags {
     final tagSet = <String>{};
@@ -59,12 +77,26 @@ class NotesListViewModel extends ChangeNotifier {
       final result = await _repository.getNotes();
       notes = result.where((n) => !_pendingDeletes.containsKey(n.id)).toList();
       status = notes.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
+      await _loadTagColors();
     } catch (e) {
       errorMessage = 'Could not load your notes.';
       status = NotesListStatus.error;
     }
 
     notifyListeners();
+  }
+
+  Future<void> _loadTagColors() async {
+    final tags = await _tagRepository.getTags();
+    _tagColors = {for (final tag in tags) tag.name: Color(tag.colorValue)};
+
+    final usedTags = <String>{for (final note in notes) ...note.tags};
+    final missingTags = usedTags.difference(_tagColors.keys.toSet());
+    for (final tagName in missingTags) {
+      final color = paletteColorForCreationIndex(_tagColors.length);
+      await _tagRepository.saveTag(Tag(name: tagName, colorValue: color.toARGB32()));
+      _tagColors[tagName] = color;
+    }
   }
 
   void deleteNoteWithUndo(String id) {
