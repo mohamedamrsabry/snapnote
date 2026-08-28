@@ -38,9 +38,9 @@ Mobile Internship Graduation Projects — 6 teams total. Difficulty: Medium. Pla
 - Req 3 (record/play/delete voice memo + duration) — done.
 - Req 4 (attachments in app storage) — done (photos and voice memos are copied into `getApplicationDocumentsDirectory()`).
 - Req 5 (search titles/body) — done.
-- Req 6 (tags/folders + filtering) — not started.
-- Req 7 (pin + swipe-delete with undo) — not started (`isPinned` field exists but unused).
-- Req 8 (share note as text + images) — not started.
+- Req 6 (tags/folders + filtering) — done.
+- Req 7 (pin + swipe-delete with undo) — mostly done: pin-to-top and swipe-to-delete both work, but there's no Undo affordance after deleting — the requirement explicitly asks for "with Undo," so this is a partial gap, not a full item.
+- Req 8 (share note as text + images) — done.
 - **Technical Challenge — file cleanup**: done. `NoteRepositoryImpl.deleteNote`/`deleteNotes` now delete the note's photo/voice-memo files from disk before removing the DB row(s), matching the Definition of Done ("Delete the note — its files are removed from storage").
 - **Technical Challenge — memory safety**: still open. No image downsizing/caching exists yet (`Image.file` used directly at full resolution) — the "keeping large images from blowing up memory" half of the Technical Challenge is unaddressed.
 
