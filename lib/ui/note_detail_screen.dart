@@ -5,10 +5,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import '../domain/note.dart';
+import '../domain/note_block.dart';
 import '../domain/note_repository.dart';
 import '../domain/tag_repository.dart';
+import 'app_theme_colors.dart';
 import 'permission_request_screen.dart';
-import 'share_note.dart';
 import 'tag_colors.dart';
 import 'view_models/note_detail_view_model.dart';
 
@@ -39,21 +40,99 @@ class _NoteDetailView extends StatefulWidget {
 
 class _NoteDetailViewState extends State<_NoteDetailView> {
   late final TextEditingController _titleController;
-  late final TextEditingController _bodyController;
+  late final FocusNode _titleFocusNode;
+  final Map<String, TextEditingController> _blockControllers = {};
+  final Map<String, FocusNode> _blockFocusNodes = {};
+  String? _focusedBlockId;
 
   @override
   void initState() {
     super.initState();
     final viewModel = context.read<NoteDetailViewModel>();
     _titleController = TextEditingController(text: viewModel.note.title);
-    _bodyController = TextEditingController(text: viewModel.note.body);
+    _titleFocusNode = FocusNode();
+    _titleFocusNode.addListener(() {
+      if (_titleFocusNode.hasFocus && _focusedBlockId != null) {
+        setState(() => _focusedBlockId = null);
+      }
+    });
+    _syncControllers(viewModel.note.blocks);
   }
 
   @override
   void dispose() {
     _titleController.dispose();
-    _bodyController.dispose();
+    _titleFocusNode.dispose();
+    for (final controller in _blockControllers.values) {
+      controller.dispose();
+    }
+    for (final focusNode in _blockFocusNodes.values) {
+      focusNode.dispose();
+    }
     super.dispose();
+  }
+
+  // Keeps one TextEditingController + FocusNode per text block in sync
+  // with the ViewModel's block list. Controllers for blocks that still
+  // exist are left alone so the user's cursor position and typing aren't
+  // disturbed, except when a block's text changed for a reason other than
+  // that same controller's own onChanged (e.g. it was just split by an
+  // inserted photo/recording), in which case the controller is updated to
+  // match.
+  void _syncControllers(List<NoteBlock> blocks) {
+    final currentIds = blocks
+        .where((b) => b.type == NoteBlockType.text)
+        .map((b) => b.id)
+        .toSet();
+    final staleIds = _blockControllers.keys
+        .where((id) => !currentIds.contains(id))
+        .toList();
+    for (final id in staleIds) {
+      _blockControllers.remove(id)?.dispose();
+      _blockFocusNodes.remove(id)?.dispose();
+    }
+
+    for (final block in blocks) {
+      if (block.type != NoteBlockType.text) continue;
+      final existing = _blockControllers[block.id];
+      if (existing == null) {
+        _blockControllers[block.id] = TextEditingController(text: block.text);
+        final focusNode = FocusNode();
+        focusNode.addListener(() {
+          if (focusNode.hasFocus) {
+            setState(() => _focusedBlockId = block.id);
+          } else if (_focusedBlockId == block.id) {
+            setState(() => _focusedBlockId = null);
+          }
+        });
+        _blockFocusNodes[block.id] = focusNode;
+      } else if (existing.text != block.text) {
+        existing.text = block.text;
+      }
+    }
+  }
+
+  void _focusEndOfNote(NoteDetailViewModel viewModel) {
+    if (viewModel.note.isLocked) {
+      _showLockedMessage();
+      return;
+    }
+    NoteBlock? lastTextBlock;
+    for (final block in viewModel.note.blocks.reversed) {
+      if (block.type == NoteBlockType.text) {
+        lastTextBlock = block;
+        break;
+      }
+    }
+    if (lastTextBlock == null) return;
+
+    final controller = _blockControllers[lastTextBlock.id];
+    final focusNode = _blockFocusNodes[lastTextBlock.id];
+    if (controller == null || focusNode == null) return;
+    focusNode.requestFocus();
+    controller.selection = TextSelection.collapsed(
+      offset: controller.text.length,
+    );
   }
 
   void _showLockedMessage() {
@@ -189,11 +268,6 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  Future<void> _handleShare() async {
-    final note = context.read<NoteDetailViewModel>().note;
-    await shareNote(note);
-  }
-
   void _handleAttachPressed() {
     final viewModel = context.read<NoteDetailViewModel>();
     if (viewModel.note.isLocked) {
@@ -203,38 +277,56 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     _showAttachmentMenu();
   }
 
+  ({String? blockId, int offset}) _currentSplitPoint() {
+    final blockId = _focusedBlockId;
+    if (blockId == null) return (blockId: null, offset: 0);
+    final offset = _blockControllers[blockId]?.selection.baseOffset ?? 0;
+    return (blockId: blockId, offset: offset < 0 ? 0 : offset);
+  }
+
   void _showAttachmentMenu() {
     showModalBottomSheet(
       context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('Take Photo'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _pickImage(ImageSource.camera);
-              },
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+        child: SafeArea(
+          top: false,
+          child: Container(
+            decoration: BoxDecoration(
+              color: pillColor(context),
+              borderRadius: BorderRadius.circular(24),
             ),
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('Choose Photo'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _pickImage(ImageSource.gallery);
-              },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _AttachmentMenuItem(
+                  icon: Icons.camera_alt,
+                  label: 'Take Photo',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _pickImage(ImageSource.camera);
+                  },
+                ),
+                _AttachmentMenuItem(
+                  icon: Icons.photo_library,
+                  label: 'Choose Photo',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _pickImage(ImageSource.gallery);
+                  },
+                ),
+                _AttachmentMenuItem(
+                  icon: Icons.voicemail,
+                  label: 'Record Audio',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _startRecording();
+                  },
+                ),
+              ],
             ),
-            ListTile(
-              leading: const Icon(Icons.mic),
-              title: const Text('Record Audio'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _startRecording();
-              },
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -255,7 +347,12 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     if (pickedFile == null) return;
 
     if (!mounted) return;
-    await context.read<NoteDetailViewModel>().addPhoto(File(pickedFile.path));
+    final split = _currentSplitPoint();
+    await context.read<NoteDetailViewModel>().addPhoto(
+      File(pickedFile.path),
+      splitBlockId: split.blockId,
+      splitOffset: split.offset,
+    );
   }
 
   Future<void> _startRecording() async {
@@ -267,13 +364,224 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     if (!granted) return;
 
     if (!mounted) return;
-    await context.read<NoteDetailViewModel>().startRecording();
+    final viewModel = context.read<NoteDetailViewModel>();
+    final split = _currentSplitPoint();
+
+    // The recorder itself only starts once the user taps the record
+    // button inside the modal — opening this menu item just opens the
+    // modal. The modal can only be left via Stop (finalizes the memo) or
+    // Cancel (discards it), never by swiping/tapping outside, so a
+    // recording can never keep running in the background after the modal
+    // closes.
+    await showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (_) => ChangeNotifierProvider<NoteDetailViewModel>.value(
+        value: viewModel,
+        child: _RecordingModal(
+          splitBlockId: split.blockId,
+          splitOffset: split.offset,
+        ),
+      ),
+    );
   }
 
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildBlock(
+    BuildContext context,
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    bool isFirstBlock,
+  ) {
+    final locked = viewModel.note.isLocked;
+    switch (block.type) {
+      case NoteBlockType.text:
+        return _buildTextBlock(viewModel, block, locked, isFirstBlock);
+      case NoteBlockType.photo:
+        return _buildPhotoBlock(viewModel, block, locked);
+      case NoteBlockType.audio:
+        return _buildAudioBlock(viewModel, block, locked);
+    }
+  }
+
+  Widget _buildTextBlock(
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    bool locked,
+    bool isFirstBlock,
+  ) {
+    final controller = _blockControllers[block.id]!;
+    final focusNode = _blockFocusNodes[block.id]!;
+    final isFocused = _focusedBlockId == block.id;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (isFocused && !locked)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _StyleToggleButton(
+                  icon: Icons.format_bold,
+                  active: block.bold,
+                  onPressed: () => viewModel.toggleBlockBold(block.id),
+                ),
+                const SizedBox(width: 8),
+                _StyleToggleButton(
+                  icon: Icons.format_italic,
+                  active: block.italic,
+                  onPressed: () => viewModel.toggleBlockItalic(block.id),
+                ),
+              ],
+            ),
+          ),
+        TextField(
+          controller: controller,
+          focusNode: focusNode,
+          maxLines: null,
+          readOnly: locked,
+          style: TextStyle(
+            color: primaryTextColor(context),
+            fontWeight: block.bold ? FontWeight.bold : FontWeight.normal,
+            fontStyle: block.italic ? FontStyle.italic : FontStyle.normal,
+          ),
+          decoration: InputDecoration(
+            hintText: isFirstBlock && block.text.isEmpty
+                ? 'Start typing...'
+                : null,
+            hintStyle: TextStyle(color: secondaryTextColor(context, 0.38)),
+            border: InputBorder.none,
+            isDense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+          onTap: locked ? _showLockedMessage : null,
+          onChanged: locked
+              ? null
+              : (value) => _handleTextChanged(viewModel, block, value),
+        ),
+      ],
+    );
+  }
+
+  // Pressing Enter inserts a newline into the controller's text before
+  // this callback runs. Rather than let that newline live inside the same
+  // block (which would force the whole paragraph to share one bold/italic
+  // state), split it into a new block so the new paragraph can be styled
+  // independently, then move focus there — matching where the cursor
+  // would land after a normal Enter press.
+  void _handleTextChanged(
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    String value,
+  ) {
+    if (!value.contains('\n')) {
+      viewModel.updateBlockText(block.id, value);
+      return;
+    }
+    viewModel.splitTextBlockIntoParagraphs(block.id, value.split('\n'));
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final blocks = context.read<NoteDetailViewModel>().note.blocks;
+      final index = blocks.indexWhere((b) => b.id == block.id);
+      if (index == -1 || index + 1 >= blocks.length) return;
+      final nextBlock = blocks[index + 1];
+      if (nextBlock.type != NoteBlockType.text) return;
+      final nextFocusNode = _blockFocusNodes[nextBlock.id];
+      final nextController = _blockControllers[nextBlock.id];
+      if (nextFocusNode == null || nextController == null) return;
+      nextFocusNode.requestFocus();
+      nextController.selection = TextSelection.collapsed(
+        offset: nextController.text.length,
+      );
+    });
+  }
+
+  Widget _buildPhotoBlock(
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    bool locked,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.file(
+                File(block.path),
+                width: 160,
+                height: 160,
+                fit: BoxFit.cover,
+              ),
+            ),
+            if (!locked)
+              Positioned(
+                top: 6,
+                right: 6,
+                child: _RemoveBlockButton(
+                  onTap: () => viewModel.removeBlock(block.id),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAudioBlock(
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    bool locked,
+  ) {
+    if (block.path.isEmpty) return const SizedBox.shrink();
+
+    final isPlaying = viewModel.isPlayingBlock(block.id);
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: pillColor(context),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              isPlaying ? Icons.pause : Icons.play_arrow,
+              color: primaryTextColor(context),
+            ),
+            onPressed: isPlaying
+                ? viewModel.pausePlayback
+                : () => viewModel.playBlockAudio(block.id),
+          ),
+          Text(
+            '${_formatDuration(viewModel.playbackPositionFor(block.id))} / '
+            '${_formatDuration(viewModel.voiceMemoDurationFor(block.id))}',
+            style: TextStyle(color: secondaryTextColor(context, 0.7)),
+          ),
+          const Spacer(),
+          if (!locked)
+            IconButton(
+              icon: Icon(
+                Icons.delete_outline,
+                color: secondaryTextColor(context, 0.7),
+              ),
+              onPressed: () => viewModel.removeBlock(block.id),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -288,9 +596,16 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
       },
       child: Scaffold(
         appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: _handleBack,
+          leading: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: pillColor(context),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(Icons.arrow_back, color: primaryTextColor(context)),
+              onPressed: _handleBack,
+            ),
           ),
           actions: [
             if (viewModel.note.isLocked)
@@ -298,151 +613,449 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                 padding: EdgeInsets.symmetric(horizontal: 8),
                 child: Icon(Icons.lock),
               ),
-            IconButton(icon: const Icon(Icons.share), onPressed: _handleShare),
-            IconButton(
-              icon: const Icon(Icons.attach_file),
-              onPressed: _handleAttachPressed,
+          ],
+        ),
+        body: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: _titleController,
+                    focusNode: _titleFocusNode,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                    readOnly: viewModel.note.isLocked,
+                    decoration: const InputDecoration(
+                      hintText: 'Title',
+                      border: InputBorder.none,
+                    ),
+                    onTap: viewModel.note.isLocked ? _showLockedMessage : null,
+                    onChanged: viewModel.note.isLocked
+                        ? null
+                        : viewModel.updateTitle,
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return Consumer<NoteDetailViewModel>(
+                          builder: (context, viewModel, child) {
+                            _syncControllers(viewModel.note.blocks);
+                            return GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onTap: () => _focusEndOfNote(viewModel),
+                              child: SingleChildScrollView(
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minHeight: constraints.maxHeight,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (
+                                        var i = 0;
+                                        i < viewModel.note.blocks.length;
+                                        i++
+                                      )
+                                        _buildBlock(
+                                          context,
+                                          viewModel,
+                                          viewModel.note.blocks[i],
+                                          i == 0,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Consumer<NoteDetailViewModel>(
+                builder: (context, viewModel, child) {
+                  final tags = viewModel.note.tags;
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            for (final tag in tags)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: pillColor(context),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      tag,
+                                      style: TextStyle(
+                                        color: primaryTextColor(context),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    GestureDetector(
+                                      onTap: viewModel.note.isLocked
+                                          ? _showLockedMessage
+                                          : () => viewModel.removeTag(tag),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 16,
+                                        color: secondaryTextColor(
+                                          context,
+                                          0.7,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            Material(
+                              color: pillColor(context),
+                              borderRadius: BorderRadius.circular(20),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: _showAddTagSheet,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.add,
+                                        size: 16,
+                                        color: primaryTextColor(context),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Add tag',
+                                        style: TextStyle(
+                                          color: primaryTextColor(context),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FloatingActionButton(
+                        heroTag: 'noteAttachButton',
+                        backgroundColor: pillColor(context),
+                        foregroundColor: primaryTextColor(context),
+                        shape: const CircleBorder(),
+                        onPressed: _handleAttachPressed,
+                        child: const Icon(Icons.attach_file),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ],
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(16.0),
+      ),
+    );
+  }
+}
+
+class _AttachmentMenuItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AttachmentMenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Icon(icon, color: primaryTextColor(context), size: 26),
+            const SizedBox(width: 20),
+            Text(
+              label,
+              style: TextStyle(
+                color: primaryTextColor(context),
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StyleToggleButton extends StatelessWidget {
+  final IconData icon;
+  final bool active;
+  final VoidCallback onPressed;
+
+  const _StyleToggleButton({
+    required this.icon,
+    required this.active,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active
+          ? secondaryTextColor(context, 0.24)
+          : pillColor(context),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, size: 18, color: primaryTextColor(context)),
+        ),
+      ),
+    );
+  }
+}
+
+class _RemoveBlockButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _RemoveBlockButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.all(6),
+          child: Icon(Icons.close, size: 18, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecordingModal extends StatefulWidget {
+  final String? splitBlockId;
+  final int splitOffset;
+
+  const _RecordingModal({required this.splitBlockId, required this.splitOffset});
+
+  @override
+  State<_RecordingModal> createState() => _RecordingModalState();
+}
+
+class _RecordingModalState extends State<_RecordingModal>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildPulseRing(double phaseOffset) {
+    final t = (_pulseController.value + phaseOffset) % 1.0;
+    final scale = 0.65 + t * 0.7;
+    final opacity = (1 - t).clamp(0.0, 1.0) * 0.35;
+    return Opacity(
+      opacity: opacity,
+      child: Transform.scale(
+        scale: scale,
+        child: Container(
+          width: 84,
+          height: 84,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.blue.withValues(alpha: 0.6),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleCenterTap(NoteDetailViewModel viewModel) async {
+    if (!viewModel.isRecording) {
+      await viewModel.startRecording(
+        splitBlockId: widget.splitBlockId,
+        splitOffset: widget.splitOffset,
+      );
+      return;
+    }
+    await viewModel.stopRecording();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _handleCancelTap(NoteDetailViewModel viewModel) async {
+    await viewModel.cancelRecording();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = context.watch<NoteDetailViewModel>();
+
+    // Recording can only be left via the record button (stop, which keeps
+    // the memo) or the cancel button (discards it) — never by swiping
+    // down, tapping outside, or the system back gesture — so a recording
+    // can never keep running unattended in the background.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {},
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SafeArea(
+          top: false,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: _titleController,
-                style: Theme.of(context).textTheme.headlineSmall,
-                readOnly: viewModel.note.isLocked,
-                decoration: const InputDecoration(
-                  hintText: 'Title',
-                  border: InputBorder.none,
+              const Text(
+                'New Recording',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
                 ),
-                onTap: viewModel.note.isLocked ? _showLockedMessage : null,
-                onChanged: viewModel.note.isLocked ? null : viewModel.updateTitle,
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: TextField(
-                  controller: _bodyController,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  readOnly: viewModel.note.isLocked,
-                  decoration: const InputDecoration(
-                    hintText: 'Start typing...',
-                    border: InputBorder.none,
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _RoundIconButton(
+                    icon: viewModel.isRecordingPaused
+                        ? Icons.mic
+                        : Icons.pause,
+                    onPressed: viewModel.isRecordingPaused
+                        ? viewModel.resumeRecording
+                        : viewModel.pauseRecording,
                   ),
-                  onTap: viewModel.note.isLocked ? _showLockedMessage : null,
-                  onChanged: viewModel.note.isLocked ? null : viewModel.updateBody,
-                ),
-              ),
-              Consumer<NoteDetailViewModel>(
-                builder: (context, viewModel, child) {
-                  final tags = viewModel.note.tags;
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        for (final tag in tags)
-                          Chip(
-                            label: Text(tag),
-                            onDeleted: viewModel.note.isLocked
-                                ? _showLockedMessage
-                                : () => viewModel.removeTag(tag),
+                  const SizedBox(width: 32),
+                  GestureDetector(
+                    onTap: () => _handleCenterTap(viewModel),
+                    child: AnimatedBuilder(
+                      animation: _pulseController,
+                      builder: (context, child) {
+                        return SizedBox(
+                          width: 140,
+                          height: 140,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              if (viewModel.isRecording) ...[
+                                _buildPulseRing(0),
+                                _buildPulseRing(0.5),
+                              ],
+                              Container(
+                                width: 84,
+                                height: 84,
+                                decoration: const BoxDecoration(
+                                  color: Colors.black,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  viewModel.isRecording
+                                      ? Icons.stop
+                                      : Icons.mic,
+                                  color: Colors.white,
+                                  size: 36,
+                                ),
+                              ),
+                            ],
                           ),
-                        ActionChip(
-                          avatar: const Icon(Icons.add, size: 16),
-                          label: const Text('Add tag'),
-                          onPressed: _showAddTagSheet,
-                        ),
-                      ],
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
-              Consumer<NoteDetailViewModel>(
-                builder: (context, viewModel, child) {
-                  final photoPaths = viewModel.note.photoPaths;
-                  if (photoPaths.isEmpty) return const SizedBox.shrink();
-
-                  return SizedBox(
-                    height: 80,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: photoPaths.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(width: 8),
-                      itemBuilder: (context, index) => ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.file(
-                          File(photoPaths[index]),
-                          width: 80,
-                          height: 80,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-              Consumer<NoteDetailViewModel>(
-                builder: (context, viewModel, child) {
-                  if (viewModel.isRecording) {
-                    return Row(
-                      children: [
-                        const Icon(Icons.mic, color: Colors.red),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Recording... ${_formatDuration(viewModel.recordingDuration)}',
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          icon: const Icon(Icons.stop),
-                          onPressed: viewModel.stopRecording,
-                        ),
-                      ],
-                    );
-                  }
-
-                  if (viewModel.note.voiceMemoPath != null) {
-                    return Row(
-                      children: [
-                        IconButton(
-                          icon: Icon(
-                            viewModel.isPlaying
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                          ),
-                          onPressed: viewModel.isPlaying
-                              ? viewModel.pausePlayback
-                              : viewModel.playVoiceMemo,
-                        ),
-                        const Text('Voice memo'),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${_formatDuration(viewModel.playbackPosition)} / ${_formatDuration(viewModel.voiceMemoDuration)}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: viewModel.note.isLocked
-                              ? _showLockedMessage
-                              : viewModel.deleteVoiceMemo,
-                        ),
-                      ],
-                    );
-                  }
-
-                  return const SizedBox.shrink();
-                },
+                  ),
+                  const SizedBox(width: 32),
+                  _RoundIconButton(
+                    icon: Icons.close,
+                    onPressed: () => _handleCancelTap(viewModel),
+                  ),
+                ],
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoundIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _RoundIconButton({required this.icon, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: const CircleBorder(side: BorderSide(color: Colors.black26)),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: SizedBox(
+          width: 52,
+          height: 52,
+          child: Icon(icon, color: Colors.black87),
         ),
       ),
     );
