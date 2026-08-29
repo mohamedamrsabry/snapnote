@@ -14,7 +14,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE $notesTable (
@@ -27,8 +27,10 @@ class AppDatabase {
             isPinned INTEGER NOT NULL,
             isLocked INTEGER NOT NULL,
             colorValue INTEGER NOT NULL,
+            blocksJson TEXT NOT NULL DEFAULT '[]',
             createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL
+            updatedAt TEXT NOT NULL,
+            archivedAt TEXT
           )
         ''');
         await db.execute('''
@@ -51,6 +53,14 @@ class AppDatabase {
           await db.execute(
             'ALTER TABLE $notesTable ADD COLUMN colorValue INTEGER NOT NULL DEFAULT $_defaultLegacyColorValue',
           );
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+            "ALTER TABLE $notesTable ADD COLUMN blocksJson TEXT NOT NULL DEFAULT '[]'",
+          );
+        }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE $notesTable ADD COLUMN archivedAt TEXT');
         }
       },
     );

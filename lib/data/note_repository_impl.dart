@@ -14,7 +14,22 @@ class NoteRepositoryImpl implements NoteRepository {
   @override
   Future<List<Note>> getNotes() async {
     final db = await _database;
-    final maps = await db.query(_tableName, orderBy: 'updatedAt DESC');
+    final maps = await db.query(
+      _tableName,
+      where: 'archivedAt IS NULL',
+      orderBy: 'updatedAt DESC',
+    );
+    return maps.map((map) => Note.fromMap(map)).toList();
+  }
+
+  @override
+  Future<List<Note>> getArchivedNotes() async {
+    final db = await _database;
+    final maps = await db.query(
+      _tableName,
+      where: 'archivedAt IS NOT NULL',
+      orderBy: 'archivedAt DESC',
+    );
     return maps.map((map) => Note.fromMap(map)).toList();
   }
 
@@ -48,6 +63,52 @@ class NoteRepositoryImpl implements NoteRepository {
   }
 
   @override
+  Future<void> archiveNote(String id) async {
+    final db = await _database;
+    await db.update(
+      _tableName,
+      {'archivedAt': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<void> archiveNotes(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await _database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.update(
+      _tableName,
+      {'archivedAt': DateTime.now().toIso8601String()},
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+    );
+  }
+
+  @override
+  Future<void> restoreNote(String id) async {
+    final db = await _database;
+    await db.update(
+      _tableName,
+      {'archivedAt': null},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<void> purgeExpiredArchivedNotes(Duration maxAge) async {
+    final cutoff = DateTime.now().subtract(maxAge);
+    final archived = await getArchivedNotes();
+    final expiredIds = archived
+        .where((note) => note.archivedAt != null && note.archivedAt!.isBefore(cutoff))
+        .map((note) => note.id)
+        .toList();
+    await deleteNotes(expiredIds);
+  }
+
+  @override
   Future<void> deleteNote(String id) async {
     final note = await getNoteById(id);
     if (note != null) {
@@ -76,15 +137,8 @@ class NoteRepositoryImpl implements NoteRepository {
   }
 
   Future<void> _deleteAttachmentFiles(Note note) async {
-    for (final path in note.photoPaths) {
+    for (final path in [...note.photoPaths, ...note.voiceMemoPaths]) {
       final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-      }
-    }
-    final voiceMemoPath = note.voiceMemoPath;
-    if (voiceMemoPath != null) {
-      final file = File(voiceMemoPath);
       if (await file.exists()) {
         await file.delete();
       }
