@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
+
 import '../domain/note.dart';
 import '../domain/note_block.dart';
 import '../domain/note_repository.dart';
@@ -137,9 +138,7 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
 
   void _showLockedMessage() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('This note is locked. Edits are disabled.'),
-      ),
+      const SnackBar(content: Text('This note is locked. Edits are disabled.')),
     );
   }
 
@@ -547,40 +546,133 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     if (block.path.isEmpty) return const SizedBox.shrink();
 
     final isPlaying = viewModel.isPlayingBlock(block.id);
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    final hasTranscript = block.transcript.isNotEmpty && !locked;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          margin: EdgeInsets.only(top: 8, bottom: hasTranscript ? 0 : 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: pillColor(context),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: primaryTextColor(context),
+                ),
+                onPressed: isPlaying
+                    ? viewModel.pausePlayback
+                    : () => viewModel.playBlockAudio(block.id),
+              ),
+              Text(
+                '${_formatDuration(viewModel.playbackPositionFor(block.id))} / '
+                '${_formatDuration(viewModel.voiceMemoDurationFor(block.id))}',
+                style: TextStyle(color: secondaryTextColor(context, 0.7)),
+              ),
+              const Spacer(),
+              if (!locked)
+                IconButton(
+                  icon: Icon(
+                    Icons.delete_outline,
+                    color: secondaryTextColor(context, 0.7),
+                  ),
+                  onPressed: () => viewModel.removeBlock(block.id),
+                ),
+            ],
+          ),
+        ),
+        if (hasTranscript) _buildTranscriptBox(viewModel, block),
+      ],
+    );
+  }
+
+  Widget _buildTranscriptBox(NoteDetailViewModel viewModel, NoteBlock block) {
+    final box = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: pillColor(context),
-        borderRadius: BorderRadius.circular(16),
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: secondaryTextColor(context, 0.18)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          IconButton(
-            icon: Icon(
-              isPlaying ? Icons.pause : Icons.play_arrow,
-              color: primaryTextColor(context),
-            ),
-            onPressed: isPlaying
-                ? viewModel.pausePlayback
-                : () => viewModel.playBlockAudio(block.id),
+          Icon(
+            Icons.subtitles_outlined,
+            size: 14,
+            color: secondaryTextColor(context, 0.45),
           ),
-          Text(
-            '${_formatDuration(viewModel.playbackPositionFor(block.id))} / '
-            '${_formatDuration(viewModel.voiceMemoDurationFor(block.id))}',
-            style: TextStyle(color: secondaryTextColor(context, 0.7)),
-          ),
-          const Spacer(),
-          if (!locked)
-            IconButton(
-              icon: Icon(
-                Icons.delete_outline,
-                color: secondaryTextColor(context, 0.7),
-              ),
-              onPressed: () => viewModel.removeBlock(block.id),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  block.transcript,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.3,
+                    fontStyle: FontStyle.italic,
+                    color: secondaryTextColor(context, 0.62),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap to add to note',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: secondaryTextColor(context, 0.4),
+                  ),
+                ),
+              ],
             ),
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: () => viewModel.discardTranscript(block.id),
+            child: Icon(
+              Icons.close,
+              size: 14,
+              color: secondaryTextColor(context, 0.4),
+            ),
+          ),
         ],
       ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 26),
+          child: Container(
+            width: 2,
+            height: 12,
+            color: secondaryTextColor(context, 0.22),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 20, bottom: 8),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => viewModel.commitTranscript(block.id),
+              child: Semantics(
+                button: true,
+                label: 'Insert transcript into note',
+                child: box,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -625,11 +717,8 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                   TextField(
                     controller: _titleController,
                     focusNode: _titleFocusNode,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
                     readOnly: viewModel.note.isLocked,
                     decoration: const InputDecoration(
                       hintText: 'Title',
@@ -726,10 +815,7 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                                       child: Icon(
                                         Icons.close,
                                         size: 16,
-                                        color: secondaryTextColor(
-                                          context,
-                                          0.7,
-                                        ),
+                                        color: secondaryTextColor(context, 0.7),
                                       ),
                                     ),
                                   ],
@@ -840,9 +926,7 @@ class _StyleToggleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: active
-          ? secondaryTextColor(context, 0.24)
-          : pillColor(context),
+      color: active ? secondaryTextColor(context, 0.24) : pillColor(context),
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
@@ -882,7 +966,10 @@ class _RecordingModal extends StatefulWidget {
   final String? splitBlockId;
   final int splitOffset;
 
-  const _RecordingModal({required this.splitBlockId, required this.splitOffset});
+  const _RecordingModal({
+    required this.splitBlockId,
+    required this.splitOffset,
+  });
 
   @override
   State<_RecordingModal> createState() => _RecordingModalState();
@@ -974,14 +1061,27 @@ class _RecordingModalState extends State<_RecordingModal>
                   color: Colors.black87,
                 ),
               ),
+              // Diagnostic only — confirms the recognizer is actually alive
+              // on this device before you rely on it for a demo. Hardcoded
+              // black54/white: this modal is always white regardless of the
+              // app's theme, so the theme helpers would render invisibly in
+              // dark mode.
+              if (viewModel.liveTranscript.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  viewModel.liveTranscript,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.black54, fontSize: 13),
+                ),
+              ],
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _RoundIconButton(
-                    icon: viewModel.isRecordingPaused
-                        ? Icons.mic
-                        : Icons.pause,
+                    icon: viewModel.isRecordingPaused ? Icons.mic : Icons.pause,
                     onPressed: viewModel.isRecordingPaused
                         ? viewModel.resumeRecording
                         : viewModel.pauseRecording,
