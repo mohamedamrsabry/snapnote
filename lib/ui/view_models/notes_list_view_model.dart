@@ -13,10 +13,13 @@ enum NotesListStatus { loading, empty, error, success }
 class NotesListViewModel extends ChangeNotifier {
   final NoteRepository _repository;
   final TagRepository _tagRepository;
-  final Map<String, Timer> _pendingDeletes = {};
+  final Map<String, Timer> _pendingDeleteTimers = {};
+  final Map<String, Note> _pendingDeleteNotes = {};
+  String? _lastPendingDeleteId;
   Map<String, Color> _tagColors = {};
 
   static const undoWindow = Duration(seconds: 4);
+  static const archiveMaxAge = Duration(days: 3);
 
   NotesListViewModel(this._repository, this._tagRepository) {
     loadNotes();
@@ -74,8 +77,11 @@ class NotesListViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
+      await _repository.purgeExpiredArchivedNotes(archiveMaxAge);
       final result = await _repository.getNotes();
-      notes = result.where((n) => !_pendingDeletes.containsKey(n.id)).toList();
+      notes = result
+          .where((n) => !_pendingDeleteTimers.containsKey(n.id))
+          .toList();
       status = notes.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
       await _loadTagColors();
     } catch (e) {
@@ -99,21 +105,39 @@ class NotesListViewModel extends ChangeNotifier {
     }
   }
 
+  // The note pending an "Undo" (i.e. the most recently swipe/bulk-deleted
+  // note still inside its undo window), or null if none. The UI's undo
+  // banner is driven directly off this instead of a Flutter SnackBar, so
+  // its visibility can never drift out of sync with the actual pending
+  // archive — both are driven by the same Timer below.
+  Note? get pendingUndoNote =>
+      _lastPendingDeleteId == null
+          ? null
+          : _pendingDeleteNotes[_lastPendingDeleteId];
+
   void deleteNoteWithUndo(String id) {
+    final note = notes.firstWhere((n) => n.id == id);
     notes = notes.where((n) => n.id != id).toList();
     status = notes.isEmpty ? NotesListStatus.empty : NotesListStatus.success;
+    _pendingDeleteNotes[id] = note;
+    _lastPendingDeleteId = id;
     notifyListeners();
 
-    _pendingDeletes[id] = Timer(undoWindow, () async {
-      _pendingDeletes.remove(id);
-      await _repository.deleteNote(id);
+    _pendingDeleteTimers[id] = Timer(undoWindow, () async {
+      _pendingDeleteTimers.remove(id);
+      _pendingDeleteNotes.remove(id);
+      if (_lastPendingDeleteId == id) _lastPendingDeleteId = null;
+      await _repository.archiveNote(id);
+      notifyListeners();
     });
   }
 
   void undoDelete(String id) {
-    final timer = _pendingDeletes.remove(id);
+    final timer = _pendingDeleteTimers.remove(id);
     if (timer == null) return;
     timer.cancel();
+    _pendingDeleteNotes.remove(id);
+    if (_lastPendingDeleteId == id) _lastPendingDeleteId = null;
     loadNotes();
   }
 
@@ -155,7 +179,7 @@ class NotesListViewModel extends ChangeNotifier {
     final ids = selectedNoteIds.isEmpty
         ? notes.map((n) => n.id).toList()
         : selectedNoteIds.toList();
-    await _repository.deleteNotes(ids);
+    await _repository.archiveNotes(ids);
     isSelectionMode = false;
     selectedNoteIds.clear();
     await loadNotes();
@@ -163,7 +187,7 @@ class NotesListViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
-    for (final timer in _pendingDeletes.values) {
+    for (final timer in _pendingDeleteTimers.values) {
       timer.cancel();
     }
     super.dispose();

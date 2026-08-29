@@ -6,12 +6,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../domain/note.dart';
+import 'app_theme_colors.dart';
 import 'note_detail_screen.dart';
 import 'search_screen.dart';
+import 'settings_screen.dart';
 import 'share_note.dart';
 import 'view_models/notes_list_view_model.dart';
-
-const _pillColor = Color(0xFF2C2C2E);
 
 class NotesListScreen extends StatelessWidget {
   const NotesListScreen({super.key});
@@ -22,20 +22,30 @@ class NotesListScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: _buildAppBar(context, viewModel),
-      body: Column(
+      body: Stack(
         children: [
-          if (!viewModel.isSelectionMode &&
-              viewModel.status == NotesListStatus.success &&
-              viewModel.allTags.isNotEmpty)
-            _buildTagFilterRow(context, viewModel),
-          Expanded(child: _buildBody(context, viewModel)),
+          Column(
+            children: [
+              if (!viewModel.isSelectionMode &&
+                  viewModel.status == NotesListStatus.success &&
+                  viewModel.allTags.isNotEmpty)
+                _buildTagFilterRow(context, viewModel),
+              Expanded(child: _buildBody(context, viewModel)),
+            ],
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 112,
+            child: _UndoBanner(viewModel: viewModel),
+          ),
         ],
       ),
       floatingActionButton: viewModel.isSelectionMode
           ? null
           : FloatingActionButton(
-              backgroundColor: _pillColor,
-              foregroundColor: Colors.white,
+              backgroundColor: pillColor(context),
+              foregroundColor: primaryTextColor(context),
               shape: const CircleBorder(),
               onPressed: () async {
                 await Navigator.of(context).push(
@@ -76,7 +86,7 @@ class NotesListScreen extends StatelessWidget {
         style: GoogleFonts.fredoka(
           fontSize: 32,
           fontWeight: FontWeight.w600,
-          color: Colors.white,
+          color: primaryTextColor(context),
         ),
       ),
       actions: [
@@ -153,16 +163,19 @@ class NotesListScreen extends StatelessWidget {
               Image.asset(
                 'assets/images/rafiki.png',
                 width: 280,
-                errorBuilder: (context, error, stackTrace) => const Icon(
+                errorBuilder: (context, error, stackTrace) => Icon(
                   Icons.edit_note,
                   size: 140,
-                  color: Colors.white24,
+                  color: secondaryTextColor(context, 0.24),
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 'Create your first note !',
-                style: TextStyle(color: Colors.white70, fontSize: 20),
+                style: TextStyle(
+                  color: secondaryTextColor(context, 0.7),
+                  fontSize: 20,
+                ),
               ),
             ],
           ),
@@ -193,24 +206,6 @@ class NotesListScreen extends StatelessWidget {
     viewModel.loadNotes();
   }
 
-  void _deleteWithUndo(
-    BuildContext context,
-    NotesListViewModel viewModel,
-    String noteId,
-  ) {
-    viewModel.deleteNoteWithUndo(noteId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Note deleted'),
-        duration: NotesListViewModel.undoWindow,
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => viewModel.undoDelete(noteId),
-        ),
-      ),
-    );
-  }
-
   Widget _buildList(BuildContext context, NotesListViewModel viewModel) {
     final notes = viewModel.filteredNotes;
     final pinnedCount = viewModel.pinnedCount;
@@ -227,7 +222,7 @@ class NotesListScreen extends StatelessWidget {
               thickness: 1,
               indent: 16,
               endIndent: 16,
-              color: Colors.white24,
+              color: secondaryTextColor(context, 0.24),
             );
           }
 
@@ -272,7 +267,7 @@ class NotesListScreen extends StatelessWidget {
                 closeOnCancel: true,
                 onDismissed: () {},
                 confirmDismiss: () async {
-                  _deleteWithUndo(context, viewModel, note.id);
+                  viewModel.deleteNoteWithUndo(note.id);
                   return false;
                 },
               ),
@@ -296,8 +291,7 @@ class NotesListScreen extends StatelessWidget {
                   ),
                 ),
                 CustomSlidableAction(
-                  onPressed: (actionContext) =>
-                      _deleteWithUndo(actionContext, viewModel, note.id),
+                  onPressed: (_) => viewModel.deleteNoteWithUndo(note.id),
                   backgroundColor: Colors.transparent,
                   child: const _SwipeActionButton(
                     icon: Icons.delete,
@@ -390,6 +384,76 @@ class NotesListScreen extends StatelessWidget {
   }
 }
 
+// Shows/hides purely off NotesListViewModel.pendingUndoNote — the same
+// state the archive Timer itself updates — instead of a Flutter SnackBar,
+// so its visibility can never drift out of sync with (or get stuck
+// relative to) the actual pending delete.
+class _UndoBanner extends StatelessWidget {
+  final NotesListViewModel viewModel;
+
+  const _UndoBanner({required this.viewModel});
+
+  @override
+  Widget build(BuildContext context) {
+    final note = viewModel.pendingUndoNote;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position:
+              Tween<Offset>(
+                begin: const Offset(0, 0.3),
+                end: Offset.zero,
+              ).animate(animation),
+          child: child,
+        ),
+      ),
+      child: note == null
+          ? const SizedBox.shrink(key: ValueKey('undo-banner-empty'))
+          : Container(
+              key: ValueKey('undo-banner-${note.id}'),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 14,
+              ),
+              decoration: BoxDecoration(
+                color: (isDarkContext(context) ? Colors.black : Colors.white)
+                    .withValues(alpha: 0.75),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Note deleted',
+                      style: TextStyle(color: primaryTextColor(context)),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => viewModel.undoDelete(note.id),
+                    child: Text(
+                      'Undo',
+                      style: TextStyle(
+                        color: primaryTextColor(context),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
 class _AppBarPillButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onPressed;
@@ -401,11 +465,11 @@ class _AppBarPillButton extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
-        color: _pillColor,
+        color: pillColor(context),
         borderRadius: BorderRadius.circular(12),
       ),
       child: IconButton(
-        icon: Icon(icon, color: Colors.white),
+        icon: Icon(icon, color: primaryTextColor(context)),
         onPressed: onPressed,
       ),
     );
@@ -422,17 +486,21 @@ class _AppBarPillMenu extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
-        color: _pillColor,
+        color: pillColor(context),
         borderRadius: BorderRadius.circular(12),
       ),
       child: PopupMenuButton<String>(
-        icon: const Icon(Icons.more_horiz, color: Colors.white),
+        icon: Icon(Icons.more_horiz, color: primaryTextColor(context)),
         onSelected: (value) {
           switch (value) {
             case 'gallery':
               viewModel.toggleGalleryView();
             case 'select':
               viewModel.enterSelectionMode();
+            case 'settings':
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
           }
         },
         itemBuilder: (context) => [
@@ -443,6 +511,7 @@ class _AppBarPillMenu extends StatelessWidget {
             ),
           ),
           const PopupMenuItem(value: 'select', child: Text('Select Notes')),
+          const PopupMenuItem(value: 'settings', child: Text('Settings')),
         ],
       ),
     );
