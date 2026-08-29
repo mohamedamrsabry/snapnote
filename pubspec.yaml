@@ -47,6 +47,7 @@ dependencies:
   share_plus: ^10.1.4
   google_fonts: ^6.2.1
   shared_preferences: ^2.3.2
+  speech_to_text: ^7.4.0
 
 dev_dependencies:
   flutter_test:
