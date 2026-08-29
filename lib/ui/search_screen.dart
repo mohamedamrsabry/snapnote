@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../domain/note_repository.dart';
+import 'app_theme_colors.dart';
 import 'note_detail_screen.dart';
 import 'view_models/search_view_model.dart';
-
-const _pillColor = Color(0xFF2C2C2E);
 
 class SearchScreen extends StatelessWidget {
   const SearchScreen({super.key});
@@ -21,16 +20,25 @@ class SearchScreen extends StatelessWidget {
 
 class _FilterInfo {
   final SearchFilter filter;
+  final IconData icon;
   final String label;
 
-  const _FilterInfo(this.filter, this.label);
+  const _FilterInfo(this.filter, this.icon, this.label);
 }
 
 const _filters = [
-  _FilterInfo(SearchFilter.lockedNotes, 'Locked Notes'),
-  _FilterInfo(SearchFilter.checklists, 'Notes with Checklists'),
-  _FilterInfo(SearchFilter.images, 'Notes with Images'),
-  _FilterInfo(SearchFilter.recordings, 'Notes with Recordings'),
+  _FilterInfo(SearchFilter.lockedNotes, Icons.lock_outline, 'Locked Notes'),
+  _FilterInfo(
+    SearchFilter.checklists,
+    Icons.check_box_outlined,
+    'Notes with Checklists',
+  ),
+  _FilterInfo(SearchFilter.images, Icons.image_outlined, 'Notes with Images'),
+  _FilterInfo(
+    SearchFilter.recordings,
+    Icons.mic_none,
+    'Notes with Recordings',
+  ),
 ];
 
 class _SearchView extends StatefulWidget {
@@ -64,21 +72,28 @@ class _SearchViewState extends State<_SearchView> {
           height: 44,
           margin: const EdgeInsets.only(right: 16),
           decoration: BoxDecoration(
-            color: _pillColor,
+            color: pillColor(context),
             borderRadius: BorderRadius.circular(22),
           ),
           child: TextField(
             controller: _controller,
             autofocus: true,
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: primaryTextColor(context)),
             decoration: InputDecoration(
+              isDense: true,
               hintText: 'Search by the title and body text...',
-              hintStyle: const TextStyle(color: Colors.white38),
+              hintStyle: TextStyle(color: secondaryTextColor(context, 0.38)),
               border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 12,
+              ),
               suffixIcon: viewModel.query.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white70),
+                      icon: Icon(
+                        Icons.close,
+                        color: secondaryTextColor(context, 0.7),
+                      ),
                       onPressed: () {
                         _controller.clear();
                         viewModel.clear();
@@ -105,10 +120,10 @@ class _SearchViewState extends State<_SearchView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Filters',
             style: TextStyle(
-              color: Colors.white,
+              color: primaryTextColor(context),
               fontSize: 18,
               fontWeight: FontWeight.bold,
             ),
@@ -116,7 +131,7 @@ class _SearchViewState extends State<_SearchView> {
           const SizedBox(height: 12),
           Container(
             decoration: BoxDecoration(
-              color: _pillColor,
+              color: pillColor(context),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Column(
@@ -125,27 +140,31 @@ class _SearchViewState extends State<_SearchView> {
                   Column(
                     children: [
                       ListTile(
+                        leading: Icon(
+                          info.icon,
+                          color: primaryTextColor(context),
+                        ),
                         title: Text(
                           info.label,
                           style: TextStyle(
-                            color: viewModel.activeFilters.contains(
-                              info.filter,
-                            )
-                                ? Colors.white
-                                : Colors.white70,
+                            color: primaryTextColor(context),
+                            fontSize: 16,
                           ),
                         ),
                         trailing: viewModel.activeFilters.contains(info.filter)
-                            ? const Icon(Icons.check, color: Colors.white)
+                            ? Icon(
+                                Icons.check,
+                                color: primaryTextColor(context),
+                              )
                             : null,
                         onTap: () => viewModel.toggleFilter(info.filter),
                       ),
                       if (info != _filters.last)
-                        const Divider(
+                        Divider(
                           height: 1,
                           indent: 16,
                           endIndent: 16,
-                          color: Colors.white24,
+                          color: secondaryTextColor(context, 0.24),
                         ),
                     ],
                   ),
@@ -159,10 +178,10 @@ class _SearchViewState extends State<_SearchView> {
 
   Widget _buildBody(BuildContext context, SearchViewModel viewModel) {
     if (viewModel.isBrowsing) {
-      return const Center(
+      return Center(
         child: Text(
           'Type to search, or pick a filter above.',
-          style: TextStyle(color: Colors.white54),
+          style: TextStyle(color: secondaryTextColor(context, 0.54)),
         ),
       );
     }
@@ -177,16 +196,19 @@ class _SearchViewState extends State<_SearchView> {
             Image.asset(
               'assets/images/cuate.png',
               width: 260,
-              errorBuilder: (context, error, stackTrace) => const Icon(
+              errorBuilder: (context, error, stackTrace) => Icon(
                 Icons.search_off,
                 size: 96,
-                color: Colors.white24,
+                color: secondaryTextColor(context, 0.24),
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               'File not found. Try searching again.',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+              style: TextStyle(
+                color: secondaryTextColor(context, 0.7),
+                fontSize: 16,
+              ),
             ),
           ],
         ),
@@ -200,13 +222,13 @@ class _SearchViewState extends State<_SearchView> {
         return ListTile(
           title: Text(
             note.title.isEmpty ? '(Untitled)' : note.title,
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: primaryTextColor(context)),
           ),
           subtitle: Text(
             note.body,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white54),
+            style: TextStyle(color: secondaryTextColor(context, 0.54)),
           ),
           onTap: () async {
             await Navigator.of(context).push(

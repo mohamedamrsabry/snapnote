@@ -36,7 +36,7 @@ class SearchViewModel extends ChangeNotifier {
           SearchFilter.lockedNotes => note.isLocked,
           SearchFilter.checklists => false,
           SearchFilter.images => note.photoPaths.isNotEmpty,
-          SearchFilter.recordings => note.voiceMemoPath != null,
+          SearchFilter.recordings => note.voiceMemoPaths.isNotEmpty,
         },
       );
       return matchesQuery && matchesFilters;
