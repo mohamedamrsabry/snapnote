@@ -320,6 +320,14 @@ class NoteDetailViewModel extends ChangeNotifier {
     final fileName = '${const Uuid().v4()}${p.extension(pickedFile.path)}';
     final savedFile = await pickedFile.copy(p.join(docsDir.path, fileName));
 
+    // image_picker leaves its own temporary copy behind in the OS cache
+    // directory (that's the file we just copied from) — once our own
+    // permanent copy exists, the original is dead weight that would
+    // otherwise sit there forever, disconnected from the note's lifecycle.
+    if (await pickedFile.exists()) {
+      await pickedFile.delete();
+    }
+
     final index = quillController.selection.baseOffset.clamp(
       0,
       quillController.document.length,
