@@ -189,29 +189,41 @@ class _SearchViewState extends State<_SearchView> {
     final results = viewModel.results;
 
     if (results.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'assets/images/cuate.png',
-              width: 260,
-              errorBuilder: (context, error, stackTrace) => Icon(
-                Icons.search_off,
-                size: 96,
-                color: secondaryTextColor(context, 0.24),
+      // Wrapped in a scrollable, height-constrained view rather than a bare
+      // Center: with the keyboard up, the remaining space can be shorter
+      // than the illustration + text, which would otherwise overflow.
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Image.asset(
+                      'assets/images/cuate.png',
+                      width: 260,
+                      errorBuilder: (context, error, stackTrace) => Icon(
+                        Icons.search_off,
+                        size: 96,
+                        color: secondaryTextColor(context, 0.24),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'File not found. Try searching again.',
+                      style: TextStyle(
+                        color: secondaryTextColor(context, 0.7),
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 24),
-            Text(
-              'File not found. Try searching again.',
-              style: TextStyle(
-                color: secondaryTextColor(context, 0.7),
-                fontSize: 16,
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       );
     }
 
