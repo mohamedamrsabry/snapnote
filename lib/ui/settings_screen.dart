@@ -70,6 +70,12 @@ class SettingsScreen extends StatelessWidget {
                 label: 'Microphone',
                 featureName: 'microphone',
               ),
+              const _SettingsDivider(),
+              _PermissionRow(
+                permission: Permission.notification,
+                label: 'Notifications',
+                featureName: 'notifications',
+              ),
             ],
           ),
           const SizedBox(height: 24),

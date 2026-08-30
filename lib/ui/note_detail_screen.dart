@@ -12,9 +12,11 @@ import '../domain/note_repository.dart';
 import '../domain/tag_repository.dart';
 import '../domain/transcription_service.dart';
 import 'app_theme_colors.dart';
+import 'go_live_button.dart';
 import 'permission_request_screen.dart';
 import 'swipe_action_button.dart';
 import 'tag_colors.dart';
+import 'view_models/live_note_view_model.dart';
 import 'view_models/note_detail_view_model.dart';
 
 class NoteDetailScreen extends StatelessWidget {
@@ -264,11 +266,41 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
 
   Future<void> _handleBack() async {
     final viewModel = context.read<NoteDetailViewModel>();
+    final liveViewModel = context.read<LiveNoteViewModel>();
     if (viewModel.isRecording) {
       await viewModel.stopRecording();
     }
     await viewModel.saveNow();
+    await liveViewModel.refresh(viewModel.note);
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _handleGoLivePressed() async {
+    final viewModel = context.read<NoteDetailViewModel>();
+    final liveViewModel = context.read<LiveNoteViewModel>();
+
+    // Turning Live off never needs permission.
+    if (liveViewModel.isLive(viewModel.note.id)) {
+      await liveViewModel.toggle(viewModel.note);
+      return;
+    }
+    if (viewModel.isNewNote) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Add a title or some text before going live.'),
+        ),
+      );
+      return;
+    }
+    final granted = await ensurePermission(
+      context,
+      Permission.notification,
+      'notifications',
+    );
+    if (!granted || !mounted) return;
+
+    await viewModel.saveNow();
+    await liveViewModel.toggle(viewModel.note);
   }
 
   void _handleAttachPressed() {
@@ -964,90 +996,108 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
               child: Consumer<NoteDetailViewModel>(
                 builder: (context, viewModel, child) {
                   final tags = viewModel.note.tags;
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            for (final tag in tags)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
+                      Consumer<LiveNoteViewModel>(
+                        builder: (context, liveViewModel, child) =>
+                            GoLiveButton(
+                              isLive: liveViewModel.isLive(viewModel.note.id),
+                              onPressed: liveViewModel.isBusy
+                                  ? null
+                                  : _handleGoLivePressed,
+                            ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                for (final tag in tags)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: pillColor(context),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          tag,
+                                          style: TextStyle(
+                                            color: primaryTextColor(context),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        GestureDetector(
+                                          onTap: viewModel.note.isLocked
+                                              ? _showLockedMessage
+                                              : () => viewModel.removeTag(tag),
+                                          child: Icon(
+                                            Icons.close,
+                                            size: 16,
+                                            color: secondaryTextColor(
+                                              context,
+                                              0.7,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                Material(
                                   color: pillColor(context),
                                   borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      tag,
-                                      style: TextStyle(
-                                        color: primaryTextColor(context),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(20),
+                                    onTap: _showAddTagSheet,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.add,
+                                            size: 16,
+                                            color: primaryTextColor(context),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Add tag',
+                                            style: TextStyle(
+                                              color: primaryTextColor(context),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    const SizedBox(width: 6),
-                                    GestureDetector(
-                                      onTap: viewModel.note.isLocked
-                                          ? _showLockedMessage
-                                          : () => viewModel.removeTag(tag),
-                                      child: Icon(
-                                        Icons.close,
-                                        size: 16,
-                                        color: secondaryTextColor(context, 0.7),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            Material(
-                              color: pillColor(context),
-                              borderRadius: BorderRadius.circular(20),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(20),
-                                onTap: _showAddTagSheet,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 6,
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.add,
-                                        size: 16,
-                                        color: primaryTextColor(context),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'Add tag',
-                                        style: TextStyle(
-                                          color: primaryTextColor(context),
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ),
-                              ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FloatingActionButton(
-                        heroTag: 'noteAttachButton',
-                        backgroundColor: pillColor(context),
-                        foregroundColor: primaryTextColor(context),
-                        shape: const CircleBorder(),
-                        onPressed: _handleAttachPressed,
-                        child: const Icon(Icons.attach_file),
+                          ),
+                          const SizedBox(width: 12),
+                          FloatingActionButton(
+                            heroTag: 'noteAttachButton',
+                            backgroundColor: pillColor(context),
+                            foregroundColor: primaryTextColor(context),
+                            shape: const CircleBorder(),
+                            onPressed: _handleAttachPressed,
+                            child: const Icon(Icons.attach_file),
+                          ),
+                        ],
                       ),
                     ],
                   );
