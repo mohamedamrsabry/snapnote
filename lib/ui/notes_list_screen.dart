@@ -487,16 +487,17 @@ class _AppBarPillMenu extends StatelessWidget {
       ),
       child: PopupMenuButton<String>(
         icon: Icon(Icons.more_horiz, color: primaryTextColor(context)),
-        onSelected: (value) {
+        onSelected: (value) async {
           switch (value) {
             case 'gallery':
               viewModel.toggleGalleryView();
             case 'select':
               viewModel.enterSelectionMode();
             case 'settings':
-              Navigator.of(
+              await Navigator.of(
                 context,
               ).push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
+              viewModel.loadNotes();
           }
         },
         itemBuilder: (context) => [
