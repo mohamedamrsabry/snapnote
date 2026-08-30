@@ -339,9 +339,26 @@ class NotesListScreen extends StatelessWidget {
                   children: [
                     Expanded(
                       child: note.photoPaths.isNotEmpty
-                          ? Image.file(
-                              File(note.photoPaths.first),
-                              fit: BoxFit.cover,
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                // Decode at the grid cell's actual pixel
+                                // size instead of the photo's full camera
+                                // resolution — the cell size varies with
+                                // screen width, so this is read from the
+                                // real layout constraints rather than a
+                                // guessed constant.
+                                final dpr = MediaQuery.of(
+                                  context,
+                                ).devicePixelRatio;
+                                return Image.file(
+                                  File(note.photoPaths.first),
+                                  fit: BoxFit.cover,
+                                  cacheWidth: (constraints.maxWidth * dpr)
+                                      .round(),
+                                  cacheHeight: (constraints.maxHeight * dpr)
+                                      .round(),
+                                );
+                              },
                             )
                           : Padding(
                               padding: const EdgeInsets.all(8.0),

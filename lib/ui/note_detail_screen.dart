@@ -650,6 +650,15 @@ class _PhotoEmbedBuilder extends EmbedBuilder {
                 width: 160,
                 height: 160,
                 fit: BoxFit.cover,
+                // Decode at roughly the thumbnail's actual pixel size
+                // instead of the photo's full camera resolution (often
+                // 3000px+ wide) — cacheWidth/cacheHeight downsample at
+                // decode time, not just at layout time like width/height
+                // alone would.
+                cacheWidth: (160 * MediaQuery.of(context).devicePixelRatio)
+                    .round(),
+                cacheHeight: (160 * MediaQuery.of(context).devicePixelRatio)
+                    .round(),
               ),
             ),
             if (!locked)
