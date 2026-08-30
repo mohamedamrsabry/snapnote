@@ -3,9 +3,6 @@ import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
-import 'package:speech_to_text/speech_to_text.dart';
-import 'package:speech_to_text/speech_recognition_result.dart';
-import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:uuid/uuid.dart';
 
 import 'dart:io';
@@ -18,17 +15,27 @@ import '../../domain/note_block.dart';
 import '../../domain/note_repository.dart';
 import '../../domain/tag.dart';
 import '../../domain/tag_repository.dart';
+import '../../domain/transcription_service.dart';
 import '../tag_colors.dart';
 
-class NoteDetailViewModel extends ChangeNotifier {
-  // Bonus feature kill switch — flip to false to make the app byte-for-byte
-  // identical to before speech-to-text existed. Voice memos are a graded
-  // requirement; transcription is not, and must never be able to regress
-  // recording itself. See the "mic conflict" note on _startTranscription.
-  static const bool kEnableTranscription = true;
+enum TranscriptionStatus { idle, loading, error }
 
+class TranscriptionUiState {
+  final TranscriptionStatus status;
+  final String? message;
+
+  const TranscriptionUiState._(this.status, this.message);
+
+  const TranscriptionUiState.loading()
+    : this._(TranscriptionStatus.loading, null);
+  const TranscriptionUiState.error(String message)
+    : this._(TranscriptionStatus.error, message);
+}
+
+class NoteDetailViewModel extends ChangeNotifier {
   final NoteRepository _repository;
   final TagRepository _tagRepository;
+  final TranscriptionService _transcriptionService;
   late Note _note;
   Timer? _debounce;
   // Created lazily, only once recording actually starts, and disposed
@@ -49,21 +56,17 @@ class NoteDetailViewModel extends ChangeNotifier {
   bool _isRecordingPaused = false;
   Duration _recordingDuration = Duration.zero;
 
-  // Speech-to-text state. The recognizer shares the mic with _recorder, so
-  // it is always the one that loses any contention — see
-  // _startTranscription. Every method here is non-fatal by construction:
-  // recognizer failure can only ever result in "no transcript", never in a
-  // lost or corrupted voice memo.
+  // Guards notifyListeners()/state writes from a transcription request that
+  // resolves after this ViewModel has already been disposed (e.g. the user
+  // navigated away mid-request).
   bool _disposed = false;
-  SpeechToText? _speech;
-  bool _stopRequested = false;
-  int _listenSessions = 0;
-  String _finalizedTranscript = '';
-  String _partialTranscript = '';
-  String get liveTranscript => [
-    _finalizedTranscript,
-    _partialTranscript,
-  ].where((s) => s.isNotEmpty).join(' ');
+
+  // Transient, per-memo transcription state — keyed by audio block id so
+  // multiple memos in one note can transcribe independently. Deliberately
+  // has no "success" status: success is `block.transcript.isNotEmpty`, so
+  // the persisted note stays the single source of truth and this map only
+  // ever holds state that should NOT survive process death.
+  final Map<String, TranscriptionUiState> _transcription = {};
 
   String? _playingBlockId;
   bool _isPlaying = false;
@@ -72,7 +75,8 @@ class NoteDetailViewModel extends ChangeNotifier {
 
   NoteDetailViewModel(
     this._repository,
-    this._tagRepository, {
+    this._tagRepository,
+    this._transcriptionService, {
     Note? existingNote,
   }) {
     final now = DateTime.now();
@@ -147,6 +151,12 @@ class NoteDetailViewModel extends ChangeNotifier {
   Duration playbackPositionFor(String blockId) => _playingBlockId == blockId
       ? (_playbackPositions[blockId] ?? Duration.zero)
       : Duration.zero;
+
+  bool get canTranscribe => _transcriptionService.isConfigured;
+  TranscriptionStatus transcriptionStatusFor(String blockId) =>
+      _transcription[blockId]?.status ?? TranscriptionStatus.idle;
+  String? transcriptionErrorFor(String blockId) =>
+      _transcription[blockId]?.message;
 
   void updateTitle(String value) {
     _note = _note.copyWith(title: value, updatedAt: DateTime.now());
@@ -373,6 +383,7 @@ class NoteDetailViewModel extends ChangeNotifier {
     }
     final blocks = _note.blocks.where((b) => b.id != blockId).toList();
     _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
+    _transcription.remove(blockId);
     notifyListeners();
     await saveNow();
   }
@@ -420,6 +431,80 @@ class NoteDetailViewModel extends ChangeNotifier {
     await saveNow();
   }
 
+  // Transcribes a memo's saved audio file via the injected
+  // TranscriptionService (a cloud call, made strictly AFTER the memo has
+  // already finished recording — never while the recorder has the mic, so
+  // this can't repeat the mic-conflict bug that broke live recognition).
+  // A block is only ever transcribed once: a cached transcript short-
+  // circuits before any network call, so re-tapping never re-bills.
+  Future<void> transcribeBlock(String blockId) async {
+    if (_note.isLocked) return;
+    final startIndex = _note.blocks.indexWhere((b) => b.id == blockId);
+    if (startIndex == -1) return;
+    final block = _note.blocks[startIndex];
+    if (block.type != NoteBlockType.audio) return;
+    if (block.path.isEmpty || block.transcript.isNotEmpty) return;
+    if (transcriptionStatusFor(blockId) == TranscriptionStatus.loading) {
+      return;
+    }
+
+    _transcription[blockId] = const TranscriptionUiState.loading();
+    notifyListeners();
+
+    try {
+      final text = await _transcriptionService.transcribe(block.path);
+      if (_disposed) return;
+      final index = _note.blocks.indexWhere((b) => b.id == blockId);
+      if (index == -1) {
+        // The memo was deleted while the request was in flight.
+        _transcription.remove(blockId);
+        return;
+      }
+      final blocks = [..._note.blocks];
+      blocks[index] = blocks[index].copyWith(transcript: text);
+      _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
+      _transcription.remove(blockId);
+      notifyListeners();
+      await saveNow();
+    } on TranscriptionException catch (e) {
+      if (_disposed) return;
+      _transcription[blockId] = TranscriptionUiState.error(_messageFor(e.kind));
+      notifyListeners();
+    } catch (_) {
+      if (_disposed) return;
+      _transcription[blockId] = const TranscriptionUiState.error(
+        'Something went wrong. Try again.',
+      );
+      notifyListeners();
+    }
+  }
+
+  void clearTranscriptionError(String blockId) {
+    _transcription.remove(blockId);
+    notifyListeners();
+  }
+
+  String _messageFor(TranscriptionErrorKind kind) {
+    switch (kind) {
+      case TranscriptionErrorKind.notConfigured:
+        return "Transcription isn't configured in this build.";
+      case TranscriptionErrorKind.network:
+        return 'No internet connection. Check your network and retry.';
+      case TranscriptionErrorKind.unauthorized:
+        return 'Transcription key was rejected.';
+      case TranscriptionErrorKind.rateLimited:
+        return 'Too many requests. Wait a moment and retry.';
+      case TranscriptionErrorKind.fileMissing:
+        return "This memo's audio file is missing.";
+      case TranscriptionErrorKind.fileTooLarge:
+        return 'This memo is too long to transcribe.';
+      case TranscriptionErrorKind.emptyResult:
+        return 'No speech detected in this memo.';
+      case TranscriptionErrorKind.server:
+        return 'Transcription service is unavailable. Retry in a moment.';
+    }
+  }
+
   // Recording only ever happens inside the recording modal: this just
   // starts the recorder and a live timer. The audio block itself isn't
   // added to the note's blocks until stopRecording() finalizes it — so
@@ -443,105 +528,6 @@ class NoteDetailViewModel extends ChangeNotifier {
     _recordingDuration = Duration.zero;
     _startRecordingTimer();
     notifyListeners();
-    await _startTranscription();
-  }
-
-  // Starts live speech recognition alongside the recorder. This is the one
-  // place the mic-conflict risk is real: the recorder above already has the
-  // microphone, and most Android devices only allow one app-level capture
-  // at a time, so the recognizer commonly loses (error_busy/error_audio_error)
-  // or simply returns nothing. That's fine — every failure here just means
-  // no transcript box appears; it can never affect the recording above,
-  // which has already fully started by the time this runs.
-  Future<void> _startTranscription() async {
-    if (!kEnableTranscription) return;
-    try {
-      _speech ??= SpeechToText();
-      final available = await _speech!.initialize(
-        onStatus: _onSpeechStatus,
-        onError: _onSpeechError,
-      );
-      if (!available) return;
-      _finalizedTranscript = '';
-      _partialTranscript = '';
-      _stopRequested = false;
-      _listenSessions = 0;
-      await _listenOnce();
-    } catch (_) {
-      // No recognizer available, mic already busy, or any other platform
-      // failure — leave the memo recording untouched and move on.
-    }
-  }
-
-  Future<void> _listenOnce() async {
-    if (_disposed || _stopRequested) return;
-    try {
-      _listenSessions++;
-      await _speech!.listen(
-        onResult: _onSpeechResult,
-        listenOptions: SpeechListenOptions(
-          partialResults: true,
-          cancelOnError: true,
-          listenMode: ListenMode.dictation,
-          listenFor: const Duration(minutes: 2),
-          pauseFor: const Duration(seconds: 5),
-        ),
-      );
-    } catch (_) {
-      // Swallow — a failed listen() just means no transcript this session.
-    }
-  }
-
-  void _onSpeechResult(SpeechRecognitionResult result) {
-    if (_disposed) return;
-    if (result.finalResult) {
-      final words = result.recognizedWords;
-      if (words.isNotEmpty) {
-        _finalizedTranscript = _finalizedTranscript.isEmpty
-            ? words
-            : '$_finalizedTranscript $words';
-      }
-      _partialTranscript = '';
-    } else {
-      _partialTranscript = result.recognizedWords;
-    }
-    if (_isRecording) notifyListeners();
-  }
-
-  void _onSpeechStatus(String status) {
-    if (_disposed || _stopRequested || !_isRecording || _isRecordingPaused) {
-      return;
-    }
-    // The platform recognizer auto-stops after a pause (pauseFor) or a max
-    // duration (listenFor), both of which are commonly shorter than a
-    // voice memo — so keep re-listening until the user actually stops the
-    // recording. The session cap guarantees this can't loop forever if the
-    // recognizer keeps ending instantly for some reason.
-    if (status != 'done' && status != 'notListening') return;
-    if (_listenSessions >= 20) return;
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (_disposed || _stopRequested || !_isRecording || _isRecordingPaused) {
-        return;
-      }
-      _listenOnce();
-    });
-  }
-
-  void _onSpeechError(SpeechRecognitionError error) {
-    // Deliberately silent: error_busy/error_audio_error (mic taken by the
-    // recorder), error_no_match, error_network, error_speech_timeout all
-    // just mean "no transcript" — never surfaced to the user.
-  }
-
-  Future<String> _finishTranscription() async {
-    _stopRequested = true;
-    try {
-      await _speech?.stop().timeout(const Duration(seconds: 2));
-    } catch (_) {}
-    final transcript = liveTranscript.trim();
-    _finalizedTranscript = '';
-    _partialTranscript = '';
-    return transcript;
   }
 
   void _startRecordingTimer() {
@@ -558,10 +544,6 @@ class NoteDetailViewModel extends ChangeNotifier {
     _recordingTimer?.cancel();
     _isRecordingPaused = true;
     notifyListeners();
-    _stopRequested = true;
-    try {
-      await _speech?.stop();
-    } catch (_) {}
   }
 
   Future<void> resumeRecording() async {
@@ -570,10 +552,6 @@ class NoteDetailViewModel extends ChangeNotifier {
     _isRecordingPaused = false;
     _startRecordingTimer();
     notifyListeners();
-    _stopRequested = false;
-    try {
-      await _listenOnce();
-    } catch (_) {}
   }
 
   Future<void> _disposeRecorder() async {
@@ -589,13 +567,8 @@ class NoteDetailViewModel extends ChangeNotifier {
     await _disposeRecorder();
     _isRecording = false;
     _isRecordingPaused = false;
-    final transcript = await _finishTranscription();
     if (path != null) {
-      final block = NoteBlock.audio(
-        id: const Uuid().v4(),
-        path: path,
-        transcript: transcript,
-      );
+      final block = NoteBlock.audio(id: const Uuid().v4(), path: path);
       _insertBlock(
         block,
         splitBlockId: _pendingSplitBlockId,
@@ -620,12 +593,6 @@ class NoteDetailViewModel extends ChangeNotifier {
     _recordingDuration = Duration.zero;
     _pendingSplitBlockId = null;
     _pendingSplitOffset = 0;
-    _stopRequested = true;
-    try {
-      await _speech?.cancel();
-    } catch (_) {}
-    _finalizedTranscript = '';
-    _partialTranscript = '';
     if (path != null) {
       final file = File(path);
       if (await file.exists()) {
@@ -649,9 +616,6 @@ class NoteDetailViewModel extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    try {
-      _speech?.cancel();
-    } catch (_) {}
     _debounce?.cancel();
     _recordingTimer?.cancel();
     _playerStateSubscription.cancel();

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'data/groq_transcription_service.dart';
 import 'data/note_repository_impl.dart';
 import 'data/settings_repository_impl.dart';
 import 'data/tag_repository_impl.dart';
 import 'domain/note_repository.dart';
 import 'domain/settings_repository.dart';
 import 'domain/tag_repository.dart';
+import 'domain/transcription_service.dart';
 import 'ui/view_models/notes_list_view_model.dart';
 import 'ui/view_models/theme_view_model.dart';
 import 'ui/notes_list_screen.dart';
@@ -25,6 +27,9 @@ class SnapNoteApp extends StatelessWidget {
         Provider<NoteRepository>(create: (_) => NoteRepositoryImpl()),
         Provider<TagRepository>(create: (_) => TagRepositoryImpl()),
         Provider<SettingsRepository>(create: (_) => SettingsRepositoryImpl()),
+        Provider<TranscriptionService>(
+          create: (_) => GroqTranscriptionService(),
+        ),
         ChangeNotifierProvider<ThemeViewModel>(
           create: (context) =>
               ThemeViewModel(context.read<SettingsRepository>()),
