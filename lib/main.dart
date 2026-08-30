@@ -2,13 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'data/groq_transcription_service.dart';
+import 'data/local_notification_live_note_service.dart';
 import 'data/note_repository_impl.dart';
 import 'data/settings_repository_impl.dart';
 import 'data/tag_repository_impl.dart';
+import 'domain/live_note_service.dart';
 import 'domain/note_repository.dart';
 import 'domain/settings_repository.dart';
 import 'domain/tag_repository.dart';
 import 'domain/transcription_service.dart';
+import 'ui/live_note_reconciler.dart';
+import 'ui/view_models/live_note_view_model.dart';
 import 'ui/view_models/notes_list_view_model.dart';
 import 'ui/view_models/theme_view_model.dart';
 import 'ui/notes_list_screen.dart';
@@ -30,6 +34,16 @@ class SnapNoteApp extends StatelessWidget {
         Provider<TranscriptionService>(
           create: (_) => GroqTranscriptionService(),
         ),
+        Provider<LiveNoteService>(
+          create: (_) => LocalNotificationLiveNoteService(),
+        ),
+        ChangeNotifierProvider<LiveNoteViewModel>(
+          create: (context) => LiveNoteViewModel(
+            context.read<LiveNoteService>(),
+            context.read<SettingsRepository>(),
+            context.read<NoteRepository>(),
+          ),
+        ),
         ChangeNotifierProvider<ThemeViewModel>(
           create: (context) =>
               ThemeViewModel(context.read<SettingsRepository>()),
@@ -40,40 +54,42 @@ class SnapNoteApp extends StatelessWidget {
           context.read<NoteRepository>(),
           context.read<TagRepository>(),
         ),
-        child: Consumer<ThemeViewModel>(
-          builder: (context, themeViewModel, child) {
-            return MaterialApp(
-              title: 'SnapNote',
-              themeMode: themeViewModel.themeMode,
-              theme: ThemeData(
-                useMaterial3: true,
-                brightness: Brightness.light,
-                scaffoldBackgroundColor: const Color(0xFFF5F5F7),
-                colorScheme: ColorScheme.fromSeed(
-                  seedColor: Colors.deepPurple,
+        child: LiveNoteReconciler(
+          child: Consumer<ThemeViewModel>(
+            builder: (context, themeViewModel, child) {
+              return MaterialApp(
+                title: 'SnapNote',
+                themeMode: themeViewModel.themeMode,
+                theme: ThemeData(
+                  useMaterial3: true,
                   brightness: Brightness.light,
+                  scaffoldBackgroundColor: const Color(0xFFF5F5F7),
+                  colorScheme: ColorScheme.fromSeed(
+                    seedColor: Colors.deepPurple,
+                    brightness: Brightness.light,
+                  ),
+                  appBarTheme: const AppBarTheme(
+                    backgroundColor: Color(0xFFF5F5F7),
+                    elevation: 0,
+                  ),
                 ),
-                appBarTheme: const AppBarTheme(
-                  backgroundColor: Color(0xFFF5F5F7),
-                  elevation: 0,
-                ),
-              ),
-              darkTheme: ThemeData(
-                useMaterial3: true,
-                brightness: Brightness.dark,
-                scaffoldBackgroundColor: const Color(0xFF1C1C1E),
-                colorScheme: ColorScheme.fromSeed(
-                  seedColor: Colors.deepPurple,
+                darkTheme: ThemeData(
+                  useMaterial3: true,
                   brightness: Brightness.dark,
+                  scaffoldBackgroundColor: const Color(0xFF1C1C1E),
+                  colorScheme: ColorScheme.fromSeed(
+                    seedColor: Colors.deepPurple,
+                    brightness: Brightness.dark,
+                  ),
+                  appBarTheme: const AppBarTheme(
+                    backgroundColor: Color(0xFF1C1C1E),
+                    elevation: 0,
+                  ),
                 ),
-                appBarTheme: const AppBarTheme(
-                  backgroundColor: Color(0xFF1C1C1E),
-                  elevation: 0,
-                ),
-              ),
-              home: const NotesListScreen(),
-            );
-          },
+                home: const NotesListScreen(),
+              );
+            },
+          ),
         ),
       ),
     );
