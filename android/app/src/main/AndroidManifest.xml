@@ -44,11 +44,5 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- Required so speech_to_text can find the device's speech
-             recognition service on API 30+; without this initialize()
-             silently returns false with no error. -->
-        <intent>
-            <action android:name="android.speech.RecognitionService"/>
-        </intent>
     </queries>
 </manifest>
