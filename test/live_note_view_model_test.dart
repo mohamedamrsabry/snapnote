@@ -1,7 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:snapnote/domain/live_note_service.dart';
 import 'package:snapnote/domain/note.dart';
-import 'package:snapnote/domain/note_block.dart';
 import 'package:snapnote/domain/note_repository.dart';
 import 'package:snapnote/domain/settings_repository.dart';
 import 'package:snapnote/ui/view_models/live_note_view_model.dart';
@@ -93,14 +94,18 @@ class FakeNoteRepository implements NoteRepository {
 Note _note(
   String id, {
   String title = '',
-  List<NoteBlock> blocks = const [],
+  String body = '',
   DateTime? archivedAt,
 }) {
   final now = DateTime(2026, 1, 1);
   return Note(
     id: id,
     title: title,
-    blocks: blocks,
+    quillJson: body.isEmpty
+        ? Note.emptyQuillJson
+        : jsonEncode([
+            {'insert': '$body\n'},
+          ]),
     colorValue: 0,
     createdAt: now,
     updatedAt: now,
@@ -156,11 +161,7 @@ void main() {
     test(
       'reconcile re-shows with the right title/body when isShowing() is false',
       () async {
-        final note = _note(
-          'Y',
-          title: 'Groceries',
-          blocks: [NoteBlock.text(id: 'b1', text: 'Milk and eggs')],
-        );
+        final note = _note('Y', title: 'Groceries', body: 'Milk and eggs');
         final service = FakeLiveNoteService()..isShowingResult = false;
         final settings = FakeSettingsRepository()..liveNoteId = 'Y';
         final notes = FakeNoteRepository({'Y': note});

@@ -34,7 +34,7 @@ class SearchViewModel extends ChangeNotifier {
       final matchesFilters = activeFilters.every(
         (filter) => switch (filter) {
           SearchFilter.lockedNotes => note.isLocked,
-          SearchFilter.checklists => false,
+          SearchFilter.checklists => note.hasChecklist,
           SearchFilter.images => note.photoPaths.isNotEmpty,
           SearchFilter.recordings => note.voiceMemoPaths.isNotEmpty,
         },

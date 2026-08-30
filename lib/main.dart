@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
 import 'package:provider/provider.dart';
 
 import 'data/groq_transcription_service.dart';
@@ -60,6 +62,12 @@ class SnapNoteApp extends StatelessWidget {
               return MaterialApp(
                 title: 'SnapNote',
                 themeMode: themeViewModel.themeMode,
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  FlutterQuillLocalizations.delegate,
+                ],
                 theme: ThemeData(
                   useMaterial3: true,
                   brightness: Brightness.light,

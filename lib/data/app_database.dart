@@ -14,7 +14,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE $notesTable (
@@ -28,6 +28,7 @@ class AppDatabase {
             isLocked INTEGER NOT NULL,
             colorValue INTEGER NOT NULL,
             blocksJson TEXT NOT NULL DEFAULT '[]',
+            quillJson TEXT NOT NULL DEFAULT '',
             createdAt TEXT NOT NULL,
             updatedAt TEXT NOT NULL,
             archivedAt TEXT
@@ -60,7 +61,14 @@ class AppDatabase {
           );
         }
         if (oldVersion < 5) {
-          await db.execute('ALTER TABLE $notesTable ADD COLUMN archivedAt TEXT');
+          await db.execute(
+            'ALTER TABLE $notesTable ADD COLUMN archivedAt TEXT',
+          );
+        }
+        if (oldVersion < 6) {
+          await db.execute(
+            "ALTER TABLE $notesTable ADD COLUMN quillJson TEXT NOT NULL DEFAULT ''",
+          );
         }
       },
     );

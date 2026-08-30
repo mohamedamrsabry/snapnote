@@ -1,17 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show TextSelection;
+import 'package:flutter_quill/flutter_quill.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
-import 'dart:io';
-
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
-
 import '../../domain/note.dart';
-import '../../domain/note_block.dart';
 import '../../domain/note_repository.dart';
 import '../../domain/tag.dart';
 import '../../domain/tag_repository.dart';
@@ -37,6 +37,16 @@ class NoteDetailViewModel extends ChangeNotifier {
   final TagRepository _tagRepository;
   final TranscriptionService _transcriptionService;
   late Note _note;
+
+  // The single rich-text document for this note's whole content — text,
+  // photos, and voice memos all live inline in it. Photos are the built-in
+  // 'image' embed type; voice memos are a plain Embeddable('audio', ...)
+  // carrying {id, path, transcript} as JSON, deliberately not using
+  // Quill's CustomBlockEmbed double-JSON-wrapping since 'audio' doesn't
+  // collide with any built-in embed type.
+  late final QuillController quillController;
+  StreamSubscription<DocChange>? _documentChangeSubscription;
+
   Timer? _debounce;
   // Created lazily, only once recording actually starts, and disposed
   // again right after — instantiating AudioRecorder unconditionally for
@@ -50,8 +60,10 @@ class NoteDetailViewModel extends ChangeNotifier {
   late final StreamSubscription<Duration> _playerPositionSubscription;
   Timer? _recordingTimer;
 
-  String? _pendingSplitBlockId;
-  int _pendingSplitOffset = 0;
+  // Where the finished voice memo embed will be inserted, captured when
+  // the recording modal opens (before it can affect the editor's own
+  // selection) rather than read fresh when the mic is tapped.
+  int _pendingInsertionIndex = 0;
   bool _isRecording = false;
   bool _isRecordingPaused = false;
   Duration _recordingDuration = Duration.zero;
@@ -61,14 +73,17 @@ class NoteDetailViewModel extends ChangeNotifier {
   // navigated away mid-request).
   bool _disposed = false;
 
-  // Transient, per-memo transcription state — keyed by audio block id so
-  // multiple memos in one note can transcribe independently. Deliberately
-  // has no "success" status: success is `block.transcript.isNotEmpty`, so
-  // the persisted note stays the single source of truth and this map only
-  // ever holds state that should NOT survive process death.
+  // Transient, per-memo transcription state — keyed by the audio embed's
+  // own id (not its document offset, which shifts as the surrounding text
+  // is edited) so multiple memos in one note can transcribe independently
+  // and a request that outlives an edit elsewhere can still find its memo
+  // again. Deliberately has no "success" status: success is the embed's
+  // own transcript field being non-empty, so the persisted note stays the
+  // single source of truth and this map only ever holds state that should
+  // NOT survive process death.
   final Map<String, TranscriptionUiState> _transcription = {};
 
-  String? _playingBlockId;
+  String? _playingAudioId;
   bool _isPlaying = false;
   final Map<String, Duration> _voiceMemoDurations = {};
   final Map<String, Duration> _playbackPositions = {};
@@ -86,35 +101,58 @@ class NoteDetailViewModel extends ChangeNotifier {
       _note = Note(
         id: const Uuid().v4(),
         title: '',
-        blocks: [NoteBlock.text(id: const Uuid().v4())],
         colorValue: tagColorPalette[0].toARGB32(),
         createdAt: now,
         updatedAt: now,
       );
       _assignStableColor();
     }
+    quillController = QuillController(
+      document: _parseDocument(_note.quillJson),
+      selection: const TextSelection.collapsed(offset: 0),
+    );
+    _documentChangeSubscription = quillController.document.changes.listen((_) {
+      if (_disposed) return;
+      _syncNoteFromDocument();
+      _scheduleSave();
+    });
     _playerStateSubscription = _player.onPlayerStateChanged.listen((state) {
       _isPlaying = state == PlayerState.playing;
       if (state == PlayerState.completed || state == PlayerState.stopped) {
-        if (_playingBlockId != null) {
-          _playbackPositions[_playingBlockId!] = Duration.zero;
+        if (_playingAudioId != null) {
+          _playbackPositions[_playingAudioId!] = Duration.zero;
         }
       }
       notifyListeners();
     });
     _playerDurationSubscription = _player.onDurationChanged.listen((duration) {
-      if (_playingBlockId != null) {
-        _voiceMemoDurations[_playingBlockId!] = duration;
+      if (_playingAudioId != null) {
+        _voiceMemoDurations[_playingAudioId!] = duration;
       }
       notifyListeners();
     });
     _playerPositionSubscription = _player.onPositionChanged.listen((position) {
-      if (_playingBlockId != null) {
-        _playbackPositions[_playingBlockId!] = position;
+      if (_playingAudioId != null) {
+        _playbackPositions[_playingAudioId!] = position;
       }
       notifyListeners();
     });
     _preloadDurations();
+  }
+
+  Document _parseDocument(String quillJson) {
+    try {
+      return Document.fromJson(jsonDecode(quillJson) as List);
+    } catch (_) {
+      return Document();
+    }
+  }
+
+  void _syncNoteFromDocument() {
+    _note = _note.copyWith(
+      quillJson: jsonEncode(quillController.document.toDelta().toJson()),
+      updatedAt: DateTime.now(),
+    );
   }
 
   Future<void> _assignStableColor() async {
@@ -125,16 +163,61 @@ class NoteDetailViewModel extends ChangeNotifier {
   }
 
   Future<void> _preloadDurations() async {
-    for (final block in _note.blocks) {
-      if (block.type == NoteBlockType.audio && block.path.isNotEmpty) {
-        await _player.setSourceDeviceFile(block.path);
-        final duration = await _player.getDuration();
-        if (duration != null) {
-          _voiceMemoDurations[block.id] = duration;
-          notifyListeners();
-        }
+    for (final embed in _audioEmbeds()) {
+      final path = embed.payload['path'] as String? ?? '';
+      final id = embed.payload['id'] as String?;
+      if (path.isEmpty || id == null) continue;
+      await _player.setSourceDeviceFile(path);
+      final duration = await _player.getDuration();
+      if (duration != null) {
+        _voiceMemoDurations[id] = duration;
+        notifyListeners();
       }
     }
+  }
+
+  // Walks the current document once, returning every audio embed found
+  // along with its current offset and decoded {id, path, transcript}
+  // payload. The offset is only valid at the instant this runs — it shifts
+  // whenever earlier content in the document changes length.
+  List<({int offset, Map<String, dynamic> payload})> _audioEmbeds() {
+    final results = <({int offset, Map<String, dynamic> payload})>[];
+    var offset = 0;
+    for (final op in quillController.document.toDelta().toJson()) {
+      final insert = op['insert'];
+      if (insert is String) {
+        offset += insert.length;
+      } else if (insert is Map) {
+        if (insert['audio'] is String) {
+          try {
+            final payload =
+                jsonDecode(insert['audio'] as String) as Map<String, dynamic>;
+            results.add((offset: offset, payload: payload));
+          } catch (_) {
+            // Malformed embed payload — skip it.
+          }
+        }
+        offset += 1;
+      }
+    }
+    return results;
+  }
+
+  ({int offset, Map<String, dynamic> payload})? _findAudioEmbed(String id) {
+    for (final embed in _audioEmbeds()) {
+      if (embed.payload['id'] == id) return embed;
+    }
+    return null;
+  }
+
+  void _replaceAudioEmbed(int offset, Map<String, dynamic> newPayload) {
+    quillController.replaceText(
+      offset,
+      1,
+      Embeddable('audio', jsonEncode(newPayload)),
+      null,
+    );
+    _syncNoteFromDocument();
   }
 
   Note get note => _note;
@@ -144,143 +227,23 @@ class NoteDetailViewModel extends ChangeNotifier {
   bool get isRecordingPaused => _isRecordingPaused;
   Duration get recordingDuration => _recordingDuration;
 
-  bool isPlayingBlock(String blockId) =>
-      _isPlaying && _playingBlockId == blockId;
-  Duration voiceMemoDurationFor(String blockId) =>
-      _voiceMemoDurations[blockId] ?? Duration.zero;
-  Duration playbackPositionFor(String blockId) => _playingBlockId == blockId
-      ? (_playbackPositions[blockId] ?? Duration.zero)
+  bool isPlayingAudio(String audioId) =>
+      _isPlaying && _playingAudioId == audioId;
+  Duration voiceMemoDurationFor(String audioId) =>
+      _voiceMemoDurations[audioId] ?? Duration.zero;
+  Duration playbackPositionFor(String audioId) => _playingAudioId == audioId
+      ? (_playbackPositions[audioId] ?? Duration.zero)
       : Duration.zero;
 
   bool get canTranscribe => _transcriptionService.isConfigured;
-  TranscriptionStatus transcriptionStatusFor(String blockId) =>
-      _transcription[blockId]?.status ?? TranscriptionStatus.idle;
-  String? transcriptionErrorFor(String blockId) =>
-      _transcription[blockId]?.message;
+  TranscriptionStatus transcriptionStatusFor(String audioId) =>
+      _transcription[audioId]?.status ?? TranscriptionStatus.idle;
+  String? transcriptionErrorFor(String audioId) =>
+      _transcription[audioId]?.message;
 
   void updateTitle(String value) {
     _note = _note.copyWith(title: value, updatedAt: DateTime.now());
     _scheduleSave();
-  }
-
-  void updateBlockText(String blockId, String value) {
-    final blocks = _note.blocks
-        .map((b) => b.id == blockId ? b.copyWith(text: value) : b)
-        .toList();
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-    _scheduleSave();
-  }
-
-  // Pressing Enter inside a text block should start a genuinely new
-  // paragraph — its own block with its own bold/italic state — rather
-  // than just inserting a newline that stays under the same style as the
-  // rest of the block. [parts] is the block's new text split on '\n'; the
-  // first part replaces the original block in place and each remaining
-  // part becomes its own new block, all seeded with the original block's
-  // current style.
-  void splitTextBlockIntoParagraphs(String blockId, List<String> parts) {
-    final blocks = [..._note.blocks];
-    final index = blocks.indexWhere((b) => b.id == blockId);
-    if (index == -1 || parts.isEmpty) return;
-
-    final target = blocks[index];
-    final replacement = <NoteBlock>[
-      NoteBlock.text(
-        id: target.id,
-        text: parts.first,
-        bold: target.bold,
-        italic: target.italic,
-      ),
-      for (final part in parts.skip(1))
-        NoteBlock.text(
-          id: const Uuid().v4(),
-          text: part,
-          bold: target.bold,
-          italic: target.italic,
-        ),
-    ];
-    blocks.replaceRange(index, index + 1, replacement);
-
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-    notifyListeners();
-    _scheduleSave();
-  }
-
-  void toggleBlockBold(String blockId) {
-    final blocks = _note.blocks
-        .map((b) => b.id == blockId ? b.copyWith(bold: !b.bold) : b)
-        .toList();
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-    notifyListeners();
-    saveNow();
-  }
-
-  void toggleBlockItalic(String blockId) {
-    final blocks = _note.blocks
-        .map((b) => b.id == blockId ? b.copyWith(italic: !b.italic) : b)
-        .toList();
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-    notifyListeners();
-    saveNow();
-  }
-
-  // Splits the block at [splitBlockId]/[splitOffset] (the text block that
-  // currently has focus, and the cursor position within it) and inserts
-  // [newBlock] between the two halves, so the user can keep typing on
-  // either side of an inserted photo or voice memo. Falls back to
-  // appending after the last block if nothing is focused.
-  void _insertBlock(
-    NoteBlock newBlock, {
-    String? splitBlockId,
-    int splitOffset = 0,
-  }) {
-    final blocks = [..._note.blocks];
-
-    int index;
-    int offset;
-    if (blocks.isEmpty) {
-      blocks.add(NoteBlock.text(id: const Uuid().v4()));
-      index = 0;
-      offset = 0;
-    } else {
-      index = splitBlockId == null
-          ? -1
-          : blocks.indexWhere(
-              (b) => b.id == splitBlockId && b.type == NoteBlockType.text,
-            );
-      if (index == -1) {
-        if (blocks.last.type != NoteBlockType.text) {
-          blocks.add(NoteBlock.text(id: const Uuid().v4()));
-        }
-        index = blocks.length - 1;
-        offset = blocks[index].text.length;
-      } else {
-        offset = splitOffset.clamp(0, blocks[index].text.length);
-      }
-    }
-
-    final target = blocks[index];
-    final before = target.text.substring(0, offset);
-    final after = target.text.substring(offset);
-    final replacement = <NoteBlock>[
-      if (before.isNotEmpty)
-        NoteBlock.text(
-          id: target.id,
-          text: before,
-          bold: target.bold,
-          italic: target.italic,
-        ),
-      newBlock,
-      NoteBlock.text(
-        id: const Uuid().v4(),
-        text: after,
-        bold: target.bold,
-        italic: target.italic,
-      ),
-    ];
-    blocks.replaceRange(index, index + 1, replacement);
-
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
   }
 
   void _scheduleSave() {
@@ -352,81 +315,85 @@ class NoteDetailViewModel extends ChangeNotifier {
     await saveNow();
   }
 
-  Future<void> addPhoto(
-    File pickedFile, {
-    String? splitBlockId,
-    int splitOffset = 0,
-  }) async {
+  Future<void> addPhoto(File pickedFile) async {
     final docsDir = await getApplicationDocumentsDirectory();
     final fileName = '${const Uuid().v4()}${p.extension(pickedFile.path)}';
     final savedFile = await pickedFile.copy(p.join(docsDir.path, fileName));
 
-    _insertBlock(
-      NoteBlock.photo(id: const Uuid().v4(), path: savedFile.path),
-      splitBlockId: splitBlockId,
-      splitOffset: splitOffset,
+    final index = quillController.selection.baseOffset.clamp(
+      0,
+      quillController.document.length,
     );
+    quillController.replaceText(
+      index,
+      0,
+      Embeddable('image', savedFile.path),
+      TextSelection.collapsed(offset: index + 1),
+    );
+    _syncNoteFromDocument();
     notifyListeners();
     await saveNow();
   }
 
-  Future<void> removeBlock(String blockId) async {
-    final block = _note.blocks.firstWhere((b) => b.id == blockId);
-    if (block.path.isNotEmpty) {
-      if (_playingBlockId == blockId && _isPlaying) {
-        await _player.stop();
-      }
-      final file = File(block.path);
-      if (await file.exists()) {
-        await file.delete();
-      }
-    }
-    final blocks = _note.blocks.where((b) => b.id != blockId).toList();
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-    _transcription.remove(blockId);
-    notifyListeners();
-    await saveNow();
-  }
-
-  // Drops the audio block's pending transcript into the note as a real
-  // text block, placed immediately after the memo it came from (not at
-  // whatever text block currently has focus — _insertBlock's split-point
-  // behavior is the wrong tool here since the user isn't necessarily
-  // editing anywhere near the memo when they tap the transcript box).
-  Future<void> commitTranscript(String blockId) async {
+  Future<void> removePhotoAt(int offset, String filePath) async {
     if (_note.isLocked) return;
-    final blocks = [..._note.blocks];
-    final index = blocks.indexWhere((b) => b.id == blockId);
-    if (index == -1) return;
-    final audio = blocks[index];
-    if (audio.type != NoteBlockType.audio || audio.transcript.isEmpty) return;
-    final text = audio.transcript;
-
-    blocks[index] = audio.copyWith(clearTranscript: true);
-
-    final next = index + 1 < blocks.length ? blocks[index + 1] : null;
-    if (next != null && next.type == NoteBlockType.text) {
-      blocks[index + 1] = next.copyWith(
-        text: next.text.isEmpty ? text : '$text\n${next.text}',
-      );
-    } else {
-      blocks.insert(
-        index + 1,
-        NoteBlock.text(id: const Uuid().v4(), text: text),
-      );
+    if (filePath.isNotEmpty) {
+      final file = File(filePath);
+      if (await file.exists()) await file.delete();
     }
-
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
+    quillController.replaceText(offset, 1, '', null);
+    _syncNoteFromDocument();
     notifyListeners();
     await saveNow();
   }
 
-  Future<void> discardTranscript(String blockId) async {
+  Future<void> removeAudio(String audioId) async {
     if (_note.isLocked) return;
-    final blocks = _note.blocks
-        .map((b) => b.id == blockId ? b.copyWith(clearTranscript: true) : b)
-        .toList();
-    _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
+    final found = _findAudioEmbed(audioId);
+    if (found == null) return;
+    if (_playingAudioId == audioId && _isPlaying) {
+      await _player.stop();
+    }
+    final path = found.payload['path'] as String? ?? '';
+    if (path.isNotEmpty) {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+    quillController.replaceText(found.offset, 1, '', null);
+    _syncNoteFromDocument();
+    _transcription.remove(audioId);
+    _voiceMemoDurations.remove(audioId);
+    _playbackPositions.remove(audioId);
+    notifyListeners();
+    await saveNow();
+  }
+
+  // Drops an audio embed's pending transcript into the note as real text,
+  // placed immediately after the memo it came from.
+  Future<void> commitTranscript(String audioId) async {
+    if (_note.isLocked) return;
+    final found = _findAudioEmbed(audioId);
+    if (found == null) return;
+    final text = found.payload['transcript'] as String? ?? '';
+    if (text.isEmpty) return;
+
+    _replaceAudioEmbed(found.offset, {...found.payload, 'transcript': ''});
+    quillController.replaceText(
+      found.offset + 1,
+      0,
+      '$text\n',
+      TextSelection.collapsed(offset: found.offset + 1 + text.length + 1),
+    );
+    _syncNoteFromDocument();
+    notifyListeners();
+    await saveNow();
+  }
+
+  Future<void> discardTranscript(String audioId) async {
+    if (_note.isLocked) return;
+    final found = _findAudioEmbed(audioId);
+    if (found == null) return;
+    _replaceAudioEmbed(found.offset, {...found.payload, 'transcript': ''});
     notifyListeners();
     await saveNow();
   }
@@ -435,52 +402,53 @@ class NoteDetailViewModel extends ChangeNotifier {
   // TranscriptionService (a cloud call, made strictly AFTER the memo has
   // already finished recording — never while the recorder has the mic, so
   // this can't repeat the mic-conflict bug that broke live recognition).
-  // A block is only ever transcribed once: a cached transcript short-
+  // A memo is only ever transcribed once: a cached transcript short-
   // circuits before any network call, so re-tapping never re-bills.
-  Future<void> transcribeBlock(String blockId) async {
+  Future<void> transcribeAudio(String audioId) async {
     if (_note.isLocked) return;
-    final startIndex = _note.blocks.indexWhere((b) => b.id == blockId);
-    if (startIndex == -1) return;
-    final block = _note.blocks[startIndex];
-    if (block.type != NoteBlockType.audio) return;
-    if (block.path.isEmpty || block.transcript.isNotEmpty) return;
-    if (transcriptionStatusFor(blockId) == TranscriptionStatus.loading) {
+    final found = _findAudioEmbed(audioId);
+    if (found == null) return;
+    final path = found.payload['path'] as String? ?? '';
+    final existingTranscript = found.payload['transcript'] as String? ?? '';
+    if (path.isEmpty || existingTranscript.isNotEmpty) return;
+    if (transcriptionStatusFor(audioId) == TranscriptionStatus.loading) {
       return;
     }
 
-    _transcription[blockId] = const TranscriptionUiState.loading();
+    _transcription[audioId] = const TranscriptionUiState.loading();
     notifyListeners();
 
     try {
-      final text = await _transcriptionService.transcribe(block.path);
+      final text = await _transcriptionService.transcribe(path);
       if (_disposed) return;
-      final index = _note.blocks.indexWhere((b) => b.id == blockId);
-      if (index == -1) {
+      final current = _findAudioEmbed(audioId);
+      if (current == null) {
         // The memo was deleted while the request was in flight.
-        _transcription.remove(blockId);
+        _transcription.remove(audioId);
         return;
       }
-      final blocks = [..._note.blocks];
-      blocks[index] = blocks[index].copyWith(transcript: text);
-      _note = _note.copyWith(blocks: blocks, updatedAt: DateTime.now());
-      _transcription.remove(blockId);
+      _replaceAudioEmbed(current.offset, {
+        ...current.payload,
+        'transcript': text,
+      });
+      _transcription.remove(audioId);
       notifyListeners();
       await saveNow();
     } on TranscriptionException catch (e) {
       if (_disposed) return;
-      _transcription[blockId] = TranscriptionUiState.error(_messageFor(e.kind));
+      _transcription[audioId] = TranscriptionUiState.error(_messageFor(e.kind));
       notifyListeners();
     } catch (_) {
       if (_disposed) return;
-      _transcription[blockId] = const TranscriptionUiState.error(
+      _transcription[audioId] = const TranscriptionUiState.error(
         'Something went wrong. Try again.',
       );
       notifyListeners();
     }
   }
 
-  void clearTranscriptionError(String blockId) {
-    _transcription.remove(blockId);
+  void clearTranscriptionError(String audioId) {
+    _transcription.remove(audioId);
     notifyListeners();
   }
 
@@ -506,18 +474,14 @@ class NoteDetailViewModel extends ChangeNotifier {
   }
 
   // Recording only ever happens inside the recording modal: this just
-  // starts the recorder and a live timer. The audio block itself isn't
-  // added to the note's blocks until stopRecording() finalizes it — so
-  // there's never a half-finished "recording in progress" block sitting
-  // in the note, and starting a second recording can never collide with
-  // a still-open one from before.
-  Future<void> startRecording({
-    String? splitBlockId,
-    int splitOffset = 0,
-  }) async {
+  // starts the recorder and a live timer. The audio embed itself isn't
+  // added to the document until stopRecording() finalizes it — so there's
+  // never a half-finished "recording in progress" embed sitting in the
+  // note, and starting a second recording can never collide with a still-
+  // open one from before.
+  Future<void> startRecording({required int insertionIndex}) async {
     if (_isRecording) return;
-    _pendingSplitBlockId = splitBlockId;
-    _pendingSplitOffset = splitOffset;
+    _pendingInsertionIndex = insertionIndex;
 
     final docsDir = await getApplicationDocumentsDirectory();
     final filePath = p.join(docsDir.path, '${const Uuid().v4()}.m4a');
@@ -568,16 +532,26 @@ class NoteDetailViewModel extends ChangeNotifier {
     _isRecording = false;
     _isRecordingPaused = false;
     if (path != null) {
-      final block = NoteBlock.audio(id: const Uuid().v4(), path: path);
-      _insertBlock(
-        block,
-        splitBlockId: _pendingSplitBlockId,
-        splitOffset: _pendingSplitOffset,
+      final audioId = const Uuid().v4();
+      final payload = jsonEncode({
+        'id': audioId,
+        'path': path,
+        'transcript': '',
+      });
+      final index = _pendingInsertionIndex.clamp(
+        0,
+        quillController.document.length,
       );
-      _voiceMemoDurations[block.id] = _recordingDuration;
+      quillController.replaceText(
+        index,
+        0,
+        Embeddable('audio', payload),
+        TextSelection.collapsed(offset: index + 1),
+      );
+      _syncNoteFromDocument();
+      _voiceMemoDurations[audioId] = _recordingDuration;
     }
-    _pendingSplitBlockId = null;
-    _pendingSplitOffset = 0;
+    _pendingInsertionIndex = 0;
     _recordingDuration = Duration.zero;
     notifyListeners();
     await saveNow();
@@ -591,8 +565,7 @@ class NoteDetailViewModel extends ChangeNotifier {
     _isRecording = false;
     _isRecordingPaused = false;
     _recordingDuration = Duration.zero;
-    _pendingSplitBlockId = null;
-    _pendingSplitOffset = 0;
+    _pendingInsertionIndex = 0;
     if (path != null) {
       final file = File(path);
       if (await file.exists()) {
@@ -602,11 +575,10 @@ class NoteDetailViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> playBlockAudio(String blockId) async {
-    final block = _note.blocks.firstWhere((b) => b.id == blockId);
-    if (block.path.isEmpty) return;
-    _playingBlockId = blockId;
-    await _player.play(DeviceFileSource(block.path));
+  Future<void> playAudio(String audioId, String path) async {
+    if (path.isEmpty) return;
+    _playingAudioId = audioId;
+    await _player.play(DeviceFileSource(path));
   }
 
   Future<void> pausePlayback() async {
@@ -618,11 +590,13 @@ class NoteDetailViewModel extends ChangeNotifier {
     _disposed = true;
     _debounce?.cancel();
     _recordingTimer?.cancel();
+    _documentChangeSubscription?.cancel();
     _playerStateSubscription.cancel();
     _playerDurationSubscription.cancel();
     _playerPositionSubscription.cancel();
     _recorder?.dispose();
     _player.dispose();
+    quillController.dispose();
     super.dispose();
   }
 }
