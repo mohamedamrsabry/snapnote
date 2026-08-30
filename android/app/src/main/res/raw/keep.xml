@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The release build's resource shrinker strips drawables it can't prove
+  are used via static analysis. ic_stat_live is only ever referenced by
+  its string name through flutter_local_notifications' platform channel
+  (AndroidInitializationSettings('ic_stat_live')), so the shrinker has
+  no way to see that reference and removes it — breaking Go Live only
+  in release builds, since debug builds don't shrink resources at all.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_live" />
