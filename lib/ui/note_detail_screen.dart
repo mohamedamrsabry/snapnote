@@ -398,6 +398,7 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                     controller: _titleController,
                     focusNode: _titleFocusNode,
                     textInputAction: TextInputAction.next,
+                    textCapitalization: TextCapitalization.sentences,
                     style: Theme.of(context).textTheme.headlineSmall
                         ?.copyWith(fontWeight: FontWeight.bold),
                     readOnly: viewModel.note.isLocked,
@@ -443,16 +444,10 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Consumer<LiveNoteViewModel>(
-                        builder: (context, liveViewModel, child) =>
-                            GoLiveButton(
-                              isLive: liveViewModel.isLive(viewModel.note.id),
-                              onPressed: liveViewModel.isBusy
-                                  ? null
-                                  : _handleGoLivePressed,
-                            ),
-                      ),
-                      const SizedBox(width: 12),
+                      if (keyboardVisible && !viewModel.note.isLocked) ...[
+                        _FormattingToolbar(controller: viewModel.quillController),
+                        const SizedBox(width: 12),
+                      ],
                       Expanded(
                         child: Wrap(
                           spacing: 8,
@@ -510,15 +505,23 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                 },
               ),
             ),
-            if (keyboardVisible && !viewModel.note.isLocked)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-                child: _FormattingToolbar(
-                  controller: viewModel.quillController,
+            // Go Live deliberately does NOT ride up with the keyboard like
+            // the tags/attach row above does. That row's fixed bottom:16
+            // rises "for free" because Scaffold already shrinks the whole
+            // Stack by viewInsets.bottom to avoid the keyboard — so Go Live
+            // stays put by subtracting that same inset back out, pinning it
+            // to the note's true bottom edge, where the keyboard just
+            // covers it instead of pushing it up.
+            Positioned(
+              left: 16,
+              bottom: 16 - MediaQuery.of(context).viewInsets.bottom,
+              child: Consumer<LiveNoteViewModel>(
+                builder: (context, liveViewModel, child) => GoLiveButton(
+                  isLive: liveViewModel.isLive(viewModel.note.id),
+                  onPressed: liveViewModel.isBusy ? null : _handleGoLivePressed,
                 ),
               ),
+            ),
           ],
         ),
       ),
@@ -1018,14 +1021,6 @@ class _FormattingToolbar extends StatelessWidget {
     );
   }
 
-  void _setFontSize(String? size) {
-    controller.formatSelection(
-      size == null
-          ? Attribute.clone(Attribute.size, null)
-          : SizeAttribute(size),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -1065,42 +1060,6 @@ class _FormattingToolbar extends StatelessWidget {
                       icon: Icons.checklist,
                       active: _isChecklist,
                       onPressed: _toggleChecklist,
-                    ),
-                    PopupMenuButton<String?>(
-                      tooltip: 'Font size',
-                      icon: const Icon(Icons.format_size, color: Colors.white),
-                      color: const Color(0xFF3A3A3C),
-                      onSelected: _setFontSize,
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: null,
-                          child: Text(
-                            'Normal',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'small',
-                          child: Text(
-                            'Small',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'large',
-                          child: Text(
-                            'Large',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'huge',
-                          child: Text(
-                            'Huge',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      ],
                     ),
                   ],
                 ),
