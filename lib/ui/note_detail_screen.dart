@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -9,8 +10,10 @@ import '../domain/note.dart';
 import '../domain/note_block.dart';
 import '../domain/note_repository.dart';
 import '../domain/tag_repository.dart';
+import '../domain/transcription_service.dart';
 import 'app_theme_colors.dart';
 import 'permission_request_screen.dart';
+import 'swipe_action_button.dart';
 import 'tag_colors.dart';
 import 'view_models/note_detail_view_model.dart';
 
@@ -25,6 +28,7 @@ class NoteDetailScreen extends StatelessWidget {
       create: (context) => NoteDetailViewModel(
         context.read<NoteRepository>(),
         context.read<TagRepository>(),
+        context.read<TranscriptionService>(),
         existingNote: existingNote,
       ),
       child: const _NoteDetailView(),
@@ -546,106 +550,118 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
     if (block.path.isEmpty) return const SizedBox.shrink();
 
     final isPlaying = viewModel.isPlayingBlock(block.id);
-    final hasTranscript = block.transcript.isNotEmpty && !locked;
+    final status = viewModel.transcriptionStatusFor(block.id);
+    final hasArea =
+        !locked &&
+        (block.transcript.isNotEmpty || status != TranscriptionStatus.idle);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          margin: EdgeInsets.only(top: 8, bottom: hasTranscript ? 0 : 8),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: pillColor(context),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
+        Slidable(
+          key: ValueKey(block.id),
+          groupTag: 'note-audio-blocks',
+          enabled: !locked,
+          endActionPane: ActionPane(
+            motion: const ScrollMotion(),
+            extentRatio: 0.28,
+            dismissible: DismissiblePane(
+              closeOnCancel: true,
+              onDismissed: () {},
+              confirmDismiss: () async {
+                viewModel.removeBlock(block.id);
+                return false;
+              },
+            ),
             children: [
-              IconButton(
-                icon: Icon(
-                  isPlaying ? Icons.pause : Icons.play_arrow,
-                  color: primaryTextColor(context),
+              CustomSlidableAction(
+                onPressed: (_) => viewModel.removeBlock(block.id),
+                backgroundColor: Colors.transparent,
+                child: const SwipeActionButton(
+                  icon: Icons.delete,
+                  label: 'Delete',
+                  color: Colors.red,
                 ),
-                onPressed: isPlaying
-                    ? viewModel.pausePlayback
-                    : () => viewModel.playBlockAudio(block.id),
               ),
-              Text(
-                '${_formatDuration(viewModel.playbackPositionFor(block.id))} / '
-                '${_formatDuration(viewModel.voiceMemoDurationFor(block.id))}',
-                style: TextStyle(color: secondaryTextColor(context, 0.7)),
-              ),
-              const Spacer(),
-              if (!locked)
-                IconButton(
-                  icon: Icon(
-                    Icons.delete_outline,
-                    color: secondaryTextColor(context, 0.7),
-                  ),
-                  onPressed: () => viewModel.removeBlock(block.id),
-                ),
             ],
           ),
+          child: Container(
+            // Bottom margin stays constant (not shrunk when a transcript
+            // area follows) so this pill's rendered height never dips
+            // below what the swipe-to-delete action needs — shrinking it
+            // for a tighter visual "hug" caused a real RenderFlex overflow
+            // in SwipeActionButton's icon+label column.
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: pillColor(context),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: Icon(
+                    isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: primaryTextColor(context),
+                  ),
+                  onPressed: isPlaying
+                      ? viewModel.pausePlayback
+                      : () => viewModel.playBlockAudio(block.id),
+                ),
+                Text(
+                  '${_formatDuration(viewModel.playbackPositionFor(block.id))} / '
+                  '${_formatDuration(viewModel.voiceMemoDurationFor(block.id))}',
+                  style: TextStyle(color: secondaryTextColor(context, 0.7)),
+                ),
+                const Spacer(),
+                if (!locked)
+                  SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: status == TranscriptionStatus.loading
+                        ? Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: secondaryTextColor(context, 0.6),
+                              ),
+                            ),
+                          )
+                        : (block.transcript.isEmpty
+                              ? IconButton(
+                                  tooltip: 'Transcribe',
+                                  icon: Icon(
+                                    Icons.description_outlined,
+                                    color: secondaryTextColor(
+                                      context,
+                                      viewModel.canTranscribe ? 0.7 : 0.3,
+                                    ),
+                                  ),
+                                  onPressed: () =>
+                                      viewModel.transcribeBlock(block.id),
+                                )
+                              : const SizedBox.shrink()),
+                  ),
+              ],
+            ),
+          ),
         ),
-        if (hasTranscript) _buildTranscriptBox(viewModel, block),
+        if (hasArea) _buildTranscriptArea(viewModel, block, status),
       ],
     );
   }
 
-  Widget _buildTranscriptBox(NoteDetailViewModel viewModel, NoteBlock block) {
-    final box = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: secondaryTextColor(context, 0.18)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.subtitles_outlined,
-            size: 14,
-            color: secondaryTextColor(context, 0.45),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  block.transcript,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1.3,
-                    fontStyle: FontStyle.italic,
-                    color: secondaryTextColor(context, 0.62),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Tap to add to note',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: secondaryTextColor(context, 0.4),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () => viewModel.discardTranscript(block.id),
-            child: Icon(
-              Icons.close,
-              size: 14,
-              color: secondaryTextColor(context, 0.4),
-            ),
-          ),
-        ],
-      ),
-    );
-
+  // Shared geometry for every state of the area under a memo: a short
+  // vertical thread connecting it to the pill above, then an indented,
+  // outlined box — so loading/ready/error all read as the same "thing
+  // hanging off this memo" rather than three different widgets.
+  Widget _transcriptShell({
+    required BuildContext context,
+    required Widget child,
+    Color? borderColor,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -659,20 +675,187 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
         ),
         Padding(
           padding: const EdgeInsets.only(left: 20, bottom: 8),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(12),
-              onTap: () => viewModel.commitTranscript(block.id),
-              child: Semantics(
-                button: true,
-                label: 'Insert transcript into note',
-                child: box,
+              border: Border.all(
+                color: borderColor ?? secondaryTextColor(context, 0.18),
               ),
             ),
+            child: child,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTranscriptArea(
+    NoteDetailViewModel viewModel,
+    NoteBlock block,
+    TranscriptionStatus status,
+  ) {
+    if (status == TranscriptionStatus.loading) {
+      return _transcriptShell(
+        context: context,
+        child: Semantics(
+          liveRegion: true,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: secondaryTextColor(context, 0.45),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Transcribing…',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontStyle: FontStyle.italic,
+                  color: secondaryTextColor(context, 0.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (status == TranscriptionStatus.error) {
+      final errorColor = Theme.of(context).colorScheme.error;
+      return _transcriptShell(
+        context: context,
+        borderColor: errorColor.withValues(alpha: 0.4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.error_outline, size: 14, color: errorColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    viewModel.transcriptionErrorFor(block.id) ??
+                        'Something went wrong.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: secondaryTextColor(context, 0.62),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => viewModel.transcribeBlock(block.id),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 2,
+                        horizontal: 2,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.refresh,
+                            size: 14,
+                            color: primaryTextColor(context),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Retry',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: primaryTextColor(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () => viewModel.clearTranscriptionError(block.id),
+              child: Icon(
+                Icons.close,
+                size: 14,
+                color: secondaryTextColor(context, 0.4),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Ready: a real transcript is sitting on the block, waiting to be
+    // committed into the note body.
+    return _transcriptShell(
+      context: context,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => viewModel.commitTranscript(block.id),
+          child: Semantics(
+            button: true,
+            label: 'Insert transcript into note',
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.subtitles_outlined,
+                  size: 14,
+                  color: secondaryTextColor(context, 0.45),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        block.transcript,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.3,
+                          fontStyle: FontStyle.italic,
+                          color: secondaryTextColor(context, 0.62),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Tap to add to note',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: secondaryTextColor(context, 0.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () => viewModel.discardTranscript(block.id),
+                  child: Icon(
+                    Icons.close,
+                    size: 14,
+                    color: secondaryTextColor(context, 0.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -739,27 +922,29 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                             return GestureDetector(
                               behavior: HitTestBehavior.translucent,
                               onTap: () => _focusEndOfNote(viewModel),
-                              child: SingleChildScrollView(
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    minHeight: constraints.maxHeight,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      for (
-                                        var i = 0;
-                                        i < viewModel.note.blocks.length;
-                                        i++
-                                      )
-                                        _buildBlock(
-                                          context,
-                                          viewModel,
-                                          viewModel.note.blocks[i],
-                                          i == 0,
-                                        ),
-                                    ],
+                              child: SlidableAutoCloseBehavior(
+                                child: SingleChildScrollView(
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minHeight: constraints.maxHeight,
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        for (
+                                          var i = 0;
+                                          i < viewModel.note.blocks.length;
+                                          i++
+                                        )
+                                          _buildBlock(
+                                            context,
+                                            viewModel,
+                                            viewModel.note.blocks[i],
+                                            i == 0,
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1061,21 +1246,6 @@ class _RecordingModalState extends State<_RecordingModal>
                   color: Colors.black87,
                 ),
               ),
-              // Diagnostic only — confirms the recognizer is actually alive
-              // on this device before you rely on it for a demo. Hardcoded
-              // black54/white: this modal is always white regardless of the
-              // app's theme, so the theme helpers would render invisibly in
-              // dark mode.
-              if (viewModel.liveTranscript.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  viewModel.liveTranscript,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.black54, fontSize: 13),
-                ),
-              ],
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
