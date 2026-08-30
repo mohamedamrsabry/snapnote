@@ -50,6 +50,13 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
   late final FocusNode _editorFocusNode;
   late final ScrollController _editorScrollController;
 
+  // Accumulated horizontal drag distance for the edge-swipe-back gesture
+  // below — implemented in-app rather than relying on the OS's own edge
+  // gesture, since that only exists when the device is in gesture
+  // navigation mode (some phones/testers still use 3-button nav, where
+  // there's no OS-level equivalent at all).
+  double _edgeSwipeDelta = 0;
+
   @override
   void initState() {
     super.initState();
@@ -427,6 +434,28 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                             _PhotoEmbedBuilder(),
                             _AudioEmbedBuilder(),
                           ],
+                          // A tap that resolves to the very end of the
+                          // document is either a genuine tap on blank space
+                          // below the content, or a tap right at the current
+                          // cursor position — in both cases, if the keyboard
+                          // is already open, there's nothing new to place
+                          // the cursor at, so dismiss it instead of no-op
+                          // re-focusing. Returning true here skips Quill's
+                          // own default tap handling entirely.
+                          onTapUp: (details, getPosition) {
+                            if (!_editorFocusNode.hasFocus) return false;
+                            final position = getPosition(
+                              details.globalPosition,
+                            );
+                            final atDocumentEnd =
+                                position.offset >=
+                                viewModel.quillController.document.length - 1;
+                            if (atDocumentEnd) {
+                              _editorFocusNode.unfocus();
+                              return true;
+                            }
+                            return false;
+                          },
                         ),
                       ),
                     ),
@@ -520,6 +549,27 @@ class _NoteDetailViewState extends State<_NoteDetailView> {
                   isLive: liveViewModel.isLive(viewModel.note.id),
                   onPressed: liveViewModel.isBusy ? null : _handleGoLivePressed,
                 ),
+              ),
+            ),
+            // A narrow strip pinned to the left edge, independent of the
+            // OS's own edge-back gesture (which only exists in gesture-nav
+            // mode — some phones/testers still use 3-button nav, where
+            // there's no OS-level equivalent to fall back on at all).
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 24,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragUpdate: (details) {
+                  _edgeSwipeDelta += details.delta.dx;
+                },
+                onHorizontalDragEnd: (details) {
+                  if (_edgeSwipeDelta > 80) _handleBack();
+                  _edgeSwipeDelta = 0;
+                },
+                onHorizontalDragCancel: () => _edgeSwipeDelta = 0,
               ),
             ),
           ],
