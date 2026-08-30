@@ -75,7 +75,11 @@ flutter test
 
 ## Screenshots
 
-_TODO: add 4–5 screenshots (home screen, note detail with a photo/voice memo, search, settings, archived notes)._
+| | |
+|---|---|
+| ![Home screen](screenshots/home-list.jpeg) Home screen | ![Note detail](screenshots/note-detail.jpeg) Note with a photo, voice memo, and Go Live |
+| ![Search filters](screenshots/search-filters.jpeg) Search filters | ![Search no results](screenshots/search-no-results.jpeg) Search — empty state |
+| ![Settings](screenshots/settings.jpeg) Settings | ![Home screen, empty state](screenshots/home-empty.jpeg) Home screen — empty state |
 
 ## Known limitations
 
